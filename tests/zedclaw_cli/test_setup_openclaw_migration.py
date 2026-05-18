@@ -260,6 +260,7 @@ class TestSetupWizardOpenclawIntegration:
             patch.object(setup_mod, "setup_agent_settings"),
             patch.object(setup_mod, "setup_gateway"),
             patch.object(setup_mod, "setup_tools"),
+            patch.object(setup_mod, "setup_oss_pr_agent"),
             patch.object(setup_mod, "save_config"),
             patch.object(setup_mod, "_print_setup_summary"),
             patch.object(setup_mod, "_offer_launch_chat"),
@@ -292,6 +293,7 @@ class TestSetupWizardOpenclawIntegration:
             patch.object(setup_mod, "setup_agent_settings"),
             patch.object(setup_mod, "setup_gateway"),
             patch.object(setup_mod, "setup_tools"),
+            patch.object(setup_mod, "setup_oss_pr_agent"),
             patch.object(setup_mod, "save_config"),
             patch.object(setup_mod, "_print_setup_summary"),
             patch.object(setup_mod, "_offer_launch_chat"),
@@ -325,6 +327,7 @@ class TestSetupWizardOpenclawIntegration:
             patch.object(setup_mod, "setup_agent_settings"),
             patch.object(setup_mod, "setup_gateway"),
             patch.object(setup_mod, "setup_tools"),
+            patch.object(setup_mod, "setup_oss_pr_agent"),
             patch.object(setup_mod, "save_config"),
             patch.object(setup_mod, "_print_setup_summary"),
             patch.object(setup_mod, "_offer_launch_chat"),
@@ -652,6 +655,7 @@ class TestSetupWizardSkipsConfiguredSections:
             patch.object(setup_mod, "setup_agent_settings") as mock_agent,
             patch.object(setup_mod, "setup_gateway") as mock_gateway,
             patch.object(setup_mod, "setup_tools") as mock_tools,
+            patch.object(setup_mod, "setup_oss_pr_agent") as mock_osspr,
             patch.object(setup_mod, "save_config"),
             patch.object(setup_mod, "_print_setup_summary"),
         ):
@@ -666,3 +670,5 @@ class TestSetupWizardSkipsConfiguredSections:
         mock_gateway.assert_called_once()
         # Tools have no keys → section runs
         mock_tools.assert_called_once()
+        # OSS PR Agent has no imported config → section runs
+        mock_osspr.assert_called_once()

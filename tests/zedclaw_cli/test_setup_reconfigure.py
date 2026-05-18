@@ -115,6 +115,7 @@ class TestExistingInstallDefault:
                 agent="zedclaw_cli.setup.setup_agent_settings",
                 gateway="zedclaw_cli.setup.setup_gateway",
                 tools="zedclaw_cli.setup.setup_tools",
+                osspr="zedclaw_cli.setup.setup_oss_pr_agent",
             )
             from zedclaw_cli.setup import run_setup_wizard
             run_setup_wizard(args)
@@ -123,12 +124,13 @@ class TestExistingInstallDefault:
         m["prompt_choice"].assert_not_called()
         # Quick-setup path NOT taken.
         m["quick"].assert_not_called()
-        # All five sections ran.
+        # All setup sections ran.
         m["model"].assert_called_once()
         m["terminal"].assert_called_once()
         m["agent"].assert_called_once()
         m["gateway"].assert_called_once()
         m["tools"].assert_called_once()
+        m["osspr"].assert_called_once()
 
     def test_reconfigure_flag_is_backwards_compat_noop(self, existing_install):
         """`zedclaw setup --reconfigure` behaves the same as bare `zedclaw setup`."""
@@ -143,6 +145,7 @@ class TestExistingInstallDefault:
                 agent="zedclaw_cli.setup.setup_agent_settings",
                 gateway="zedclaw_cli.setup.setup_gateway",
                 tools="zedclaw_cli.setup.setup_tools",
+                osspr="zedclaw_cli.setup.setup_oss_pr_agent",
             )
             from zedclaw_cli.setup import run_setup_wizard
             run_setup_wizard(args)
@@ -153,6 +156,7 @@ class TestExistingInstallDefault:
         m["agent"].assert_called_once()
         m["gateway"].assert_called_once()
         m["tools"].assert_called_once()
+        m["osspr"].assert_called_once()
 
 
 class TestQuickFlag:
@@ -170,6 +174,7 @@ class TestQuickFlag:
                 agent="zedclaw_cli.setup.setup_agent_settings",
                 gateway="zedclaw_cli.setup.setup_gateway",
                 tools="zedclaw_cli.setup.setup_tools",
+                osspr="zedclaw_cli.setup.setup_oss_pr_agent",
             )
             from zedclaw_cli.setup import run_setup_wizard
             run_setup_wizard(args)
@@ -181,6 +186,7 @@ class TestQuickFlag:
         m["agent"].assert_not_called()
         m["gateway"].assert_not_called()
         m["tools"].assert_not_called()
+        m["osspr"].assert_not_called()
 
 
 class TestFreshInstall:
