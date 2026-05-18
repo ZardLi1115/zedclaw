@@ -4,7 +4,7 @@ let
   src = ../web;
   npmDeps = pkgs.fetchNpmDeps {
     inherit src;
-    hash = "sha256-HWB1piIPglTXbzQHXFYHLgVZIbDb60esupXSQGa1+lI=";
+    hash = "sha256-crFskWDia2JPxW/JDOqXLR6pa6nXVn/cUjPO8o9AVs8=";
   };
 
   npm = zedclawNpmLib.mkNpmPassthru { folder = "web"; attr = "web"; pname = "zedclaw-web"; };
