@@ -6,9 +6,10 @@ import logging
 import subprocess
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, time as dt_time, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from zedclaw_cli.config import load_config
 
@@ -47,10 +48,63 @@ def _wake_bounds(cfg: dict[str, Any]) -> tuple[float, float]:
     return max(60.0, min_delay), max(600.0, max_delay)
 
 
+def _agent_timezone(cfg: dict[str, Any]) -> ZoneInfo:
+    tz_name = str(_agent_cfg(cfg).get("timezone") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+    try:
+        return ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        logger.warning("invalid oss_pr_agent timezone %r; falling back to Asia/Shanghai", tz_name)
+        return ZoneInfo("Asia/Shanghai")
+
+
+def _parse_hhmm(value: Any, fallback: str) -> dt_time:
+    text = str(value or fallback).strip()
+    try:
+        hour_text, minute_text = text.split(":", 1)
+        hour = int(hour_text)
+        minute = int(minute_text)
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return dt_time(hour, minute)
+    except Exception:
+        pass
+    hour_text, minute_text = fallback.split(":", 1)
+    return dt_time(int(hour_text), int(minute_text))
+
+
+def _sleep_end_timestamp(cfg: dict[str, Any], at_ts: float | None = None) -> float | None:
+    agent_cfg = _agent_cfg(cfg)
+    if not agent_cfg.get("sleep_enabled", True):
+        return None
+    tz = _agent_timezone(cfg)
+    local_now = datetime.fromtimestamp(at_ts or time.time(), tz=timezone.utc).astimezone(tz)
+    start = _parse_hhmm(agent_cfg.get("sleep_start"), "21:00")
+    end = _parse_hhmm(agent_cfg.get("sleep_end"), "09:00")
+    today_start = datetime.combine(local_now.date(), start, tzinfo=tz)
+    today_end = datetime.combine(local_now.date(), end, tzinfo=tz)
+
+    if start == end:
+        return None
+    if start < end:
+        if today_start <= local_now < today_end:
+            return today_end.timestamp()
+        return None
+
+    if local_now >= today_start:
+        return (today_end + timedelta(days=1)).timestamp()
+    if local_now < today_end:
+        return today_end.timestamp()
+    return None
+
+
+def _apply_sleep_window(cfg: dict[str, Any], target_ts: float) -> float:
+    sleep_end = _sleep_end_timestamp(cfg, target_ts)
+    return max(target_ts, sleep_end) if sleep_end else target_ts
+
+
 def _set_next_wake(conn, cfg: dict[str, Any], delay_seconds: float, reason: str) -> None:
     min_delay, max_delay = _wake_bounds(cfg)
     delay = min(max(delay_seconds, min_delay), max_delay)
-    state.set_meta(conn, "next_wake_at", time.time() + delay)
+    state.set_meta(conn, "next_wake_at", _apply_sleep_window(cfg, time.time() + delay))
     state.set_meta(conn, "next_wake_reason", reason)
 
 
@@ -546,6 +600,12 @@ def tick_once() -> dict[str, Any]:
                 return {"status": "daily_review_completed"}
 
             now = time.time()
+            sleep_end = _sleep_end_timestamp(cfg, now)
+            if sleep_end:
+                state.set_meta(conn, "next_wake_at", sleep_end)
+                state.set_meta(conn, "next_wake_reason", "sleep window")
+                return {"status": "sleep_window", "next_wake_at": sleep_end}
+
             next_wake = float(state.get_meta(conn, "next_wake_at", 0) or 0)
             if now < next_wake:
                 email_poll_interval = float(_agent_cfg(cfg).get("email_poll_interval_seconds", 0) or 0)

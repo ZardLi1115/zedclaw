@@ -15,7 +15,7 @@ from . import github_ops, state
 
 
 ACTIVE_STATUSES = ("RUNNING_CODEX", "OPENING_PR", "WAITING_CI", "NEEDS_FIX", "FIXING_PR")
-BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+DEFAULT_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def _age(ts: float | int | None) -> str:
@@ -33,10 +33,26 @@ def _age(ts: float | int | None) -> str:
     return f"{hours // 24}d ago"
 
 
+def _agent_timezone() -> ZoneInfo:
+    cfg = load_config()
+    agent_cfg = cfg.get("oss_pr_agent", {}) if isinstance(cfg, dict) else {}
+    tz_name = str(agent_cfg.get("timezone") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+    try:
+        return ZoneInfo(tz_name)
+    except Exception:
+        return DEFAULT_TZ
+
+
+def _timezone_label() -> str:
+    cfg = load_config()
+    agent_cfg = cfg.get("oss_pr_agent", {}) if isinstance(cfg, dict) else {}
+    return str(agent_cfg.get("timezone") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+
+
 def _iso(ts: float | int | None) -> str:
     if not ts:
         return "unknown"
-    return datetime.fromtimestamp(float(ts), tz=timezone.utc).astimezone(BEIJING_TZ).strftime("%H:%M")
+    return datetime.fromtimestamp(float(ts), tz=timezone.utc).astimezone(_agent_timezone()).strftime("%H:%M")
 
 
 def _lock_state() -> str:
@@ -135,6 +151,8 @@ def _zh_reason(reason: Any) -> str:
         return "检查活跃 PR。"
     if "check newly opened pr" in lower:
         return "检查新打开的 PR。"
+    if "sleep window" in lower:
+        return "处于用户设置的睡眠时间段。"
     if "check pr after" in lower and "fix" in lower:
         return "自动修复后检查 PR。"
     replacements = [
@@ -156,6 +174,7 @@ def _zh_reason(reason: Any) -> str:
         ("check pr after email-triggered fix", "邮件/GitHub 触发修复后检查 PR"),
         ("check newly opened pr", "检查新打开的 PR"),
         ("planner sleep", "planner 休眠"),
+        ("sleep window", "用户设置的睡眠时间段"),
         ("manual wake after action case fix", "修复 action 大小写后手动唤醒"),
         ("manual wake after action alias fix", "修复 action 别名后手动唤醒"),
     ]
@@ -279,7 +298,7 @@ def render_status() -> str:
             lines = [
                 f"OSS PR Agent：{state_map.get(state_word, state_word)}",
                 f"Runtime 锁：{state_map.get(lock, lock)}",
-                f"下次唤醒（北京时间）：{_iso(next_wake)}" + (f"（{_zh_reason(next_reason)}）" if next_reason else ""),
+                f"下次唤醒（{_timezone_label()}）：{_iso(next_wake)}" + (f"（{_zh_reason(next_reason)}）" if next_reason else ""),
                 f"上次 Gmail 检查：{_age(last_email)}",
                 f"待人工检查项：{human_count}",
                 f"已提交 PR 数：{submitted_count}",
@@ -289,7 +308,7 @@ def render_status() -> str:
             lines = [
                 f"OSS PR Agent: {state_word}",
                 f"Runtime lock: {lock}",
-                f"Next wake (Beijing): {_iso(next_wake)}" + (f" ({next_reason})" if next_reason else ""),
+                f"Next wake ({_timezone_label()}): {_iso(next_wake)}" + (f" ({next_reason})" if next_reason else ""),
                 f"Last Gmail check: {_age(last_email)}",
                 f"Open human review items: {human_count}",
                 f"Submitted PRs: {submitted_count}",

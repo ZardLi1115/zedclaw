@@ -177,7 +177,7 @@ def is_interactive_stdin() -> bool:
 def print_noninteractive_setup_guidance(reason: str | None = None) -> None:
     """Print guidance for headless/non-interactive setup flows."""
     print()
-    print(color("⚕ ZedClaw Setup — Non-interactive mode", Colors.CYAN, Colors.BOLD))
+    print(color("◢ ZedClaw Setup — Non-interactive mode", Colors.CYAN, Colors.BOLD))
     print()
     if reason:
         print_info(reason)
@@ -2646,6 +2646,32 @@ def _osspr_queries_from_terms(terms: list[str]) -> tuple[list[str], list[str]]:
     return queries, fallback
 
 
+def _normalize_osspr_timezone(value: str) -> str:
+    tz_name = str(value or "Asia/Shanghai").strip() or "Asia/Shanghai"
+    try:
+        from zoneinfo import ZoneInfo
+
+        ZoneInfo(tz_name)
+        return tz_name
+    except Exception:
+        print_warning(f"Unknown timezone '{tz_name}'; using Asia/Shanghai.")
+        return "Asia/Shanghai"
+
+
+def _normalize_osspr_hhmm(value: str, fallback: str) -> str:
+    text = str(value or fallback).strip()
+    try:
+        hour_text, minute_text = text.split(":", 1)
+        hour = int(hour_text)
+        minute = int(minute_text)
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return f"{hour:02d}:{minute:02d}"
+    except Exception:
+        pass
+    print_warning(f"Invalid time '{text}'; using {fallback}.")
+    return fallback
+
+
 def _configure_osspr_github_cli() -> None:
     print()
     print_header("OSS PR Agent GitHub CLI")
@@ -2750,6 +2776,32 @@ def setup_oss_pr_agent(config: dict):
         lang_default,
     )
     agent_cfg["language"] = "zh" if lang_idx == 0 else "en"
+
+    timezone_name = prompt(
+        "OSS PR Agent timezone",
+        str(agent_cfg.get("timezone") or "Asia/Shanghai"),
+    ).strip()
+    agent_cfg["timezone"] = _normalize_osspr_timezone(timezone_name)
+
+    sleep_enabled = prompt_yes_no(
+        "Enable OSS PR Agent sleep window?",
+        bool(agent_cfg.get("sleep_enabled", True)),
+    )
+    agent_cfg["sleep_enabled"] = sleep_enabled
+    if sleep_enabled:
+        sleep_start = prompt(
+            "  Sleep start time (HH:MM)",
+            str(agent_cfg.get("sleep_start") or "21:00"),
+        ).strip()
+        sleep_end = prompt(
+            "  Sleep end time (HH:MM)",
+            str(agent_cfg.get("sleep_end") or "09:00"),
+        ).strip()
+        agent_cfg["sleep_start"] = _normalize_osspr_hhmm(sleep_start, "21:00")
+        agent_cfg["sleep_end"] = _normalize_osspr_hhmm(sleep_end, "09:00")
+    else:
+        agent_cfg.pop("sleep_start", None)
+        agent_cfg.pop("sleep_end", None)
 
     current_focus = str(agent_cfg.get("focus") or "all").strip() or "all"
     focus_default = 0 if current_focus.lower() == "all" else 1
@@ -3309,7 +3361,7 @@ def run_setup_wizard(args):
                         Colors.MAGENTA,
                     )
                 )
-                print(color(f"│     ⚕ ZedClaw Setup — {label:<34s} │", Colors.MAGENTA))
+                print(color(f"│     ◢ ZedClaw Setup — {label:<34s} │", Colors.MAGENTA))
                 print(
                     color(
                         "└─────────────────────────────────────────────────────────┘",
@@ -3345,7 +3397,7 @@ def run_setup_wizard(args):
     )
     print(
         color(
-            "│             ⚕ ZedClaw Setup Wizard                │", Colors.MAGENTA
+            "│             ◢ ZedClaw Setup Wizard                │", Colors.MAGENTA
         )
     )
     print(
