@@ -2672,13 +2672,13 @@ def _normalize_osspr_hhmm(value: str, fallback: str) -> str:
     return fallback
 
 
-def _configure_osspr_github_cli() -> None:
+def _configure_osspr_github_cli(is_zh: bool = False) -> None:
     print()
     print_header("OSS PR Agent GitHub CLI")
     if shutil.which("gh") is None:
-        print_warning("GitHub CLI is required for OSS PR Agent but was not found.")
-        print_info("Install it first: https://cli.github.com/")
-        print_info("Then run: gh auth login")
+        print_warning("OSS PR Agent 需要 GitHub CLI，但当前未找到。" if is_zh else "GitHub CLI is required for OSS PR Agent but was not found.")
+        print_info("请先安装：https://cli.github.com/" if is_zh else "Install it first: https://cli.github.com/")
+        print_info("然后运行：gh auth login" if is_zh else "Then run: gh auth login")
         return
 
     import subprocess
@@ -2689,12 +2689,12 @@ def _configure_osspr_github_cli() -> None:
         stderr=subprocess.DEVNULL,
     )
     if auth.returncode == 0:
-        print_success("GitHub CLI is installed and authenticated.")
+        print_success("GitHub CLI 已安装且已认证。" if is_zh else "GitHub CLI is installed and authenticated.")
         return
 
-    print_warning("GitHub CLI is installed but not authenticated.")
-    print_info("OSS PR Agent needs GitHub auth to search issues, fork repositories, open PRs, and read PR checks.")
-    if prompt_yes_no("Run 'gh auth login' now?", True):
+    print_warning("GitHub CLI 已安装但尚未认证。" if is_zh else "GitHub CLI is installed but not authenticated.")
+    print_info("OSS PR Agent 需要 GitHub 认证来搜索 issue、fork 仓库、提交 PR 和读取 PR 检查。" if is_zh else "OSS PR Agent needs GitHub auth to search issues, fork repositories, open PRs, and read PR checks.")
+    if prompt_yes_no("现在运行 'gh auth login'？" if is_zh else "Run 'gh auth login' now?", True):
         subprocess.run(["gh", "auth", "login"], check=False)
         verify = subprocess.run(
             ["gh", "auth", "status"],
@@ -2702,18 +2702,18 @@ def _configure_osspr_github_cli() -> None:
             stderr=subprocess.DEVNULL,
         )
         if verify.returncode == 0:
-            print_success("GitHub CLI authenticated.")
+            print_success("GitHub CLI 已认证。" if is_zh else "GitHub CLI authenticated.")
         else:
-            print_warning("GitHub CLI is still not authenticated. Re-run 'gh auth login' before starting OSS PR Agent.")
+            print_warning("GitHub CLI 仍未认证。启动 OSS PR Agent 前请重新运行 'gh auth login'。" if is_zh else "GitHub CLI is still not authenticated. Re-run 'gh auth login' before starting OSS PR Agent.")
     else:
-        print_info("Skipped GitHub login. Run 'gh auth login' before starting OSS PR Agent.")
+        print_info("已跳过 GitHub 登录。启动 OSS PR Agent 前请运行 'gh auth login'。" if is_zh else "Skipped GitHub login. Run 'gh auth login' before starting OSS PR Agent.")
 
 
-def _configure_osspr_gmail_intake() -> None:
+def _configure_osspr_gmail_intake(is_zh: bool = False) -> None:
     print()
-    print_header("OSS PR Agent Gmail/IMAP Intake")
-    print_info("Optional: OSS PR Agent can read GitHub PR notification emails via IMAP.")
-    print_info("For Gmail, use an app password and make sure IMAP is enabled.")
+    print_header("OSS PR Agent Gmail/IMAP 收件" if is_zh else "OSS PR Agent Gmail/IMAP Intake")
+    print_info("可选：OSS PR Agent 可以通过 IMAP 读取 GitHub PR 通知邮件。" if is_zh else "Optional: OSS PR Agent can read GitHub PR notification emails via IMAP.")
+    print_info("如果使用 Gmail，请使用应用专用密码，并确认已启用 IMAP。" if is_zh else "For Gmail, use an app password and make sure IMAP is enabled.")
 
     current_addr = get_env_value("EMAIL_ADDRESS")
     current_password = get_env_value("EMAIL_PASSWORD")
@@ -2721,38 +2721,35 @@ def _configure_osspr_gmail_intake() -> None:
     current_port = get_env_value("EMAIL_IMAP_PORT") or "993"
 
     if current_addr and current_password:
-        print_success(f"Email intake is already configured for {current_addr}.")
-        if not prompt_yes_no("Reconfigure email intake?", False):
+        print_success(f"邮件收件已为 {current_addr} 配置。" if is_zh else f"Email intake is already configured for {current_addr}.")
+        if not prompt_yes_no("重新配置邮件收件？" if is_zh else "Reconfigure email intake?", False):
             return
 
     choice = prompt_choice(
-        "Configure Gmail/IMAP intake?",
-        [
-            "Configure now",
-            "Skip email intake",
-        ],
+        "配置 Gmail/IMAP 收件？" if is_zh else "Configure Gmail/IMAP intake?",
+        ["现在配置", "跳过邮件收件"] if is_zh else ["Configure now", "Skip email intake"],
         0 if not current_addr else 1,
     )
     if choice == 1:
-        print_info("Skipped email intake. OSS PR Agent will still monitor GitHub PR activity via GitHub CLI.")
+        print_info("已跳过邮件收件。OSS PR Agent 仍会通过 GitHub CLI 监控 PR 活动。" if is_zh else "Skipped email intake. OSS PR Agent will still monitor GitHub PR activity via GitHub CLI.")
         return
 
-    addr = prompt("  Email address", current_addr).strip()
-    password = prompt("  Email app password (leave blank to keep current)", password=True).strip()
+    addr = prompt("  邮箱地址" if is_zh else "  Email address", current_addr).strip()
+    password = prompt("  邮箱应用专用密码（留空则保留当前值）" if is_zh else "  Email app password (leave blank to keep current)", password=True).strip()
     if not password and current_password:
         password = current_password
-    host = prompt("  IMAP host", current_host).strip() or "imap.gmail.com"
-    port = prompt("  IMAP port", current_port).strip() or "993"
+    host = prompt("  IMAP 主机" if is_zh else "  IMAP host", current_host).strip() or "imap.gmail.com"
+    port = prompt("  IMAP 端口" if is_zh else "  IMAP port", current_port).strip() or "993"
 
     if not addr or not password:
-        print_warning("Email address/password missing; email intake was not configured.")
+        print_warning("邮箱地址或密码缺失；邮件收件未配置。" if is_zh else "Email address/password missing; email intake was not configured.")
         return
 
     save_env_value("EMAIL_ADDRESS", addr)
     save_env_value("EMAIL_PASSWORD", password)
     save_env_value("EMAIL_IMAP_HOST", host)
     save_env_value("EMAIL_IMAP_PORT", port)
-    print_success("Email intake configured.")
+    print_success("邮件收件已配置。" if is_zh else "Email intake configured.")
 
 
 def setup_oss_pr_agent(config: dict):
@@ -2776,25 +2773,26 @@ def setup_oss_pr_agent(config: dict):
         lang_default,
     )
     agent_cfg["language"] = "zh" if lang_idx == 0 else "en"
+    is_zh = agent_cfg["language"] == "zh"
 
     timezone_name = prompt(
-        "OSS PR Agent timezone",
+        "OSS PR Agent 时区" if is_zh else "OSS PR Agent timezone",
         str(agent_cfg.get("timezone") or "Asia/Shanghai"),
     ).strip()
     agent_cfg["timezone"] = _normalize_osspr_timezone(timezone_name)
 
     sleep_enabled = prompt_yes_no(
-        "Enable OSS PR Agent sleep window?",
+        "启用 OSS PR Agent 睡眠时间段？" if is_zh else "Enable OSS PR Agent sleep window?",
         bool(agent_cfg.get("sleep_enabled", True)),
     )
     agent_cfg["sleep_enabled"] = sleep_enabled
     if sleep_enabled:
         sleep_start = prompt(
-            "  Sleep start time (HH:MM)",
+            "  睡眠开始时间（HH:MM）" if is_zh else "  Sleep start time (HH:MM)",
             str(agent_cfg.get("sleep_start") or "21:00"),
         ).strip()
         sleep_end = prompt(
-            "  Sleep end time (HH:MM)",
+            "  睡眠结束时间（HH:MM）" if is_zh else "  Sleep end time (HH:MM)",
             str(agent_cfg.get("sleep_end") or "09:00"),
         ).strip()
         agent_cfg["sleep_start"] = _normalize_osspr_hhmm(sleep_start, "21:00")
@@ -2803,23 +2801,28 @@ def setup_oss_pr_agent(config: dict):
         agent_cfg.pop("sleep_start", None)
         agent_cfg.pop("sleep_end", None)
 
-    consolidation_days = prompt(
-        "Experience consolidation interval in days",
-        str(agent_cfg.get("experience_consolidation_days") or 3),
+    sleepwalking_days = prompt(
+        "梦游 Sleepwalking 间隔天数" if is_zh else "Sleepwalking interval in days",
+        str(agent_cfg.get("sleepwalking_interval_days") or agent_cfg.get("experience_consolidation_days") or 3),
     ).strip()
     try:
-        agent_cfg["experience_consolidation_days"] = max(1, int(consolidation_days))
+        agent_cfg["sleepwalking_interval_days"] = max(1, int(sleepwalking_days))
+        agent_cfg.pop("experience_consolidation_days", None)
     except ValueError:
-        print_warning("Invalid consolidation interval; keeping previous value.")
+        print_warning("无效的梦游间隔；保留原值。" if is_zh else "Invalid sleepwalking interval; keeping previous value.")
 
     current_focus = str(agent_cfg.get("focus") or "all").strip() or "all"
     focus_default = 0 if current_focus.lower() == "all" else 1
     focus_idx = prompt_choice(
-        "PR target direction:",
-        [
-            "All default agent/LLM/harness engineering directions",
-            "Custom direction/search terms",
-        ],
+        "PR 目标方向：" if is_zh else "PR target direction:",
+        (
+            ["默认全部方向：Agent / 大模型 / Harness Engineering", "自定义方向/搜索词"]
+            if is_zh
+            else [
+                "All default agent/LLM/harness engineering directions",
+                "Custom direction/search terms",
+            ]
+        ),
         focus_default,
     )
     if focus_idx == 0:
@@ -2828,7 +2831,7 @@ def setup_oss_pr_agent(config: dict):
         agent_cfg.pop("fallback_repository_queries", None)
     else:
         focus_text = prompt(
-            "  Direction terms (comma-separated)",
+            "  方向关键词（逗号分隔）" if is_zh else "  Direction terms (comma-separated)",
             current_focus if current_focus.lower() != "all" else "agent framework, LLM eval harness, MCP agent tests",
         )
         terms = _split_osspr_focus_terms(focus_text)
@@ -2838,13 +2841,13 @@ def setup_oss_pr_agent(config: dict):
             agent_cfg["repository_queries"] = queries
             agent_cfg["fallback_repository_queries"] = fallback_queries
         else:
-            print_warning("No custom direction entered; keeping all default directions.")
+            print_warning("未输入自定义方向；保留默认全部方向。" if is_zh else "No custom direction entered; keeping all default directions.")
             agent_cfg["focus"] = "all"
             agent_cfg.pop("repository_queries", None)
             agent_cfg.pop("fallback_repository_queries", None)
 
     codex_model = prompt(
-        "Codex CLI model",
+        "Codex CLI 模型" if is_zh else "Codex CLI model",
         str(agent_cfg.get("codex_model") or "gpt-5.5"),
     ).strip()
     if codex_model:
@@ -2853,40 +2856,40 @@ def setup_oss_pr_agent(config: dict):
     current_effort = str(agent_cfg.get("codex_reasoning_effort") or "medium").strip().lower()
     effort_choices = ["low", "medium", "high", "xhigh"]
     effort_default = effort_choices.index(current_effort) if current_effort in effort_choices else 1
-    effort_idx = prompt_choice("Codex CLI reasoning effort:", effort_choices, effort_default)
+    effort_idx = prompt_choice("Codex CLI 思考强度：" if is_zh else "Codex CLI reasoning effort:", effort_choices, effort_default)
     agent_cfg["codex_reasoning_effort"] = effort_choices[effort_idx]
 
-    max_active = prompt("Max active PRs", str(agent_cfg.get("max_active_prs") or 3)).strip()
+    max_active = prompt("最大活跃 PR 数" if is_zh else "Max active PRs", str(agent_cfg.get("max_active_prs") or 3)).strip()
     try:
         agent_cfg["max_active_prs"] = max(1, int(max_active))
     except ValueError:
-        print_warning("Invalid max active PRs; keeping previous value.")
+        print_warning("无效的最大活跃 PR 数；保留原值。" if is_zh else "Invalid max active PRs; keeping previous value.")
 
-    min_stars = prompt("Minimum repository stars", str(agent_cfg.get("min_repo_stars") or 100)).strip()
+    min_stars = prompt("仓库最低 star 数" if is_zh else "Minimum repository stars", str(agent_cfg.get("min_repo_stars") or 100)).strip()
     try:
         agent_cfg["min_repo_stars"] = max(0, int(min_stars))
     except ValueError:
-        print_warning("Invalid minimum stars; keeping previous value.")
+        print_warning("无效的最低 star 数；保留原值。" if is_zh else "Invalid minimum stars; keeping previous value.")
 
-    active_days = prompt("Repository active window in days", str(agent_cfg.get("max_repo_inactive_days") or 30)).strip()
+    active_days = prompt("仓库活跃窗口天数" if is_zh else "Repository active window in days", str(agent_cfg.get("max_repo_inactive_days") or 30)).strip()
     try:
         agent_cfg["max_repo_inactive_days"] = max(1, int(active_days))
     except ValueError:
-        print_warning("Invalid active window; keeping previous value.")
+        print_warning("无效的活跃窗口；保留原值。" if is_zh else "Invalid active window; keeping previous value.")
 
     fallback_days = prompt(
-        "Fallback repository active window in days",
+        "放宽条件时的仓库活跃窗口天数" if is_zh else "Fallback repository active window in days",
         str(agent_cfg.get("fallback_max_repo_inactive_days") or 60),
     ).strip()
     try:
         agent_cfg["fallback_max_repo_inactive_days"] = max(1, int(fallback_days))
     except ValueError:
-        print_warning("Invalid fallback active window; keeping previous value.")
+        print_warning("无效的放宽活跃窗口；保留原值。" if is_zh else "Invalid fallback active window; keeping previous value.")
 
-    _configure_osspr_github_cli()
-    _configure_osspr_gmail_intake()
+    _configure_osspr_github_cli(is_zh)
+    _configure_osspr_gmail_intake(is_zh)
 
-    print_success("OSS PR Agent configuration saved.")
+    print_success("OSS PR Agent 配置已保存。" if is_zh else "OSS PR Agent configuration saved.")
 
 
 # =============================================================================

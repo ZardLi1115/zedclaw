@@ -84,8 +84,8 @@ def test_setup_oss_pr_agent_custom_direction(monkeypatch):
     monkeypatch.setattr(setup_mod, "prompt_yes_no", lambda *args, **kwargs: True)
     monkeypatch.setattr(setup_mod, "prompt_choice", lambda *args, **kwargs: next(choices))
     monkeypatch.setattr(setup_mod, "prompt", lambda *args, **kwargs: next(prompts))
-    monkeypatch.setattr(setup_mod, "_configure_osspr_github_cli", lambda: None)
-    monkeypatch.setattr(setup_mod, "_configure_osspr_gmail_intake", lambda: None)
+    monkeypatch.setattr(setup_mod, "_configure_osspr_github_cli", lambda *args, **kwargs: None)
+    monkeypatch.setattr(setup_mod, "_configure_osspr_gmail_intake", lambda *args, **kwargs: None)
 
     setup_mod.setup_oss_pr_agent(config)
 
@@ -96,7 +96,7 @@ def test_setup_oss_pr_agent_custom_direction(monkeypatch):
     assert oss["sleep_enabled"] is True
     assert oss["sleep_start"] == "21:00"
     assert oss["sleep_end"] == "09:00"
-    assert oss["experience_consolidation_days"] == 3
+    assert oss["sleepwalking_interval_days"] == 3
     assert oss["focus"] == "eval harness, agent runtime"
     assert oss["codex_model"] == "gpt-5.5"
     assert oss["codex_reasoning_effort"] == "medium"
@@ -122,8 +122,8 @@ def test_setup_oss_pr_agent_all_clears_custom_queries(monkeypatch):
     monkeypatch.setattr(setup_mod, "prompt_yes_no", lambda *args, **kwargs: True)
     monkeypatch.setattr(setup_mod, "prompt_choice", lambda *args, **kwargs: next(choices))
     monkeypatch.setattr(setup_mod, "prompt", lambda *args, **kwargs: next(prompts))
-    monkeypatch.setattr(setup_mod, "_configure_osspr_github_cli", lambda: None)
-    monkeypatch.setattr(setup_mod, "_configure_osspr_gmail_intake", lambda: None)
+    monkeypatch.setattr(setup_mod, "_configure_osspr_github_cli", lambda *args, **kwargs: None)
+    monkeypatch.setattr(setup_mod, "_configure_osspr_gmail_intake", lambda *args, **kwargs: None)
 
     setup_mod.setup_oss_pr_agent(config)
 
@@ -133,7 +133,7 @@ def test_setup_oss_pr_agent_all_clears_custom_queries(monkeypatch):
     assert oss["sleep_enabled"] is True
     assert oss["sleep_start"] == "22:30"
     assert oss["sleep_end"] == "08:15"
-    assert oss["experience_consolidation_days"] == 5
+    assert oss["sleepwalking_interval_days"] == 5
     assert oss["focus"] == "all"
     assert "repository_queries" not in oss
     assert "fallback_repository_queries" not in oss

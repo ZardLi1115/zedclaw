@@ -175,12 +175,15 @@ def notify_daily_review(cfg: dict[str, Any], review: dict[str, str]) -> None:
     _send_long(cfg, lessons_header, review.get("lessons") or "")
 
 
-def notify_experience_consolidated(cfg: dict[str, Any], summary: dict[str, str]) -> None:
+def notify_sleepwalking_completed(cfg: dict[str, Any], summary: dict[str, str]) -> None:
     if _language() == "zh":
-        header = f"OSS PR Agent 已完成阶段性经验压缩，写入 {summary.get('agent_path')}"
+        header = f"OSS PR Agent 已完成梦游 Sleepwalking，经验已写入 {summary.get('agent_path')}"
     else:
-        header = f"OSS PR Agent consolidated long-term lessons into {summary.get('agent_path')}"
+        header = f"OSS PR Agent completed sleepwalking and wrote long-term lessons into {summary.get('agent_path')}"
     _send_long(cfg, header, summary.get("summary") or "")
+
+
+notify_experience_consolidated = notify_sleepwalking_completed
 
 
 def notify_goodnight(cfg: dict[str, Any]) -> None:

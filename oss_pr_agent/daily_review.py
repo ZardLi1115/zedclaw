@@ -77,16 +77,27 @@ def already_ran_today(conn, cfg: dict[str, Any], now_ts: float | None = None) ->
     return state.get_meta(conn, "daily_review_last_date") == now.date().isoformat()
 
 
-def consolidation_due(conn, cfg: dict[str, Any], now_ts: float | None = None) -> bool:
+def sleepwalking_due(conn, cfg: dict[str, Any], now_ts: float | None = None) -> bool:
     agent_cfg = _agent_cfg(cfg)
-    interval_days = max(1, int(agent_cfg.get("experience_consolidation_days", 3) or 3))
+    interval_days = max(
+        1,
+        int(
+            agent_cfg.get("sleepwalking_interval_days")
+            or agent_cfg.get("experience_consolidation_days", 3)
+            or 3
+        ),
+    )
     now = datetime.fromtimestamp(now_ts or time.time(), tz=_agent_timezone(cfg))
-    consolidate_at = _sleep_start_datetime(cfg, now) + timedelta(hours=1)
-    if now < consolidate_at:
+    sleepwalk_at = _sleep_start_datetime(cfg, now) + timedelta(hours=1)
+    if now < sleepwalk_at:
         return False
     if state.get_meta(conn, "daily_review_last_date") != now.date().isoformat():
         return False
-    last = str(state.get_meta(conn, "experience_consolidation_last_date", "") or "")
+    last = str(
+        state.get_meta(conn, "sleepwalking_last_date", "")
+        or state.get_meta(conn, "experience_consolidation_last_date", "")
+        or ""
+    )
     if not last:
         return True
     try:
@@ -227,7 +238,7 @@ def run_daily_review(conn, cfg: dict[str, Any], now_ts: float | None = None) -> 
     }
 
 
-def consolidate_experience(conn, cfg: dict[str, Any], now_ts: float | None = None) -> dict[str, str]:
+def run_sleepwalking(conn, cfg: dict[str, Any], now_ts: float | None = None) -> dict[str, str]:
     now = datetime.fromtimestamp(now_ts or time.time(), tz=_agent_timezone(cfg))
     day = now.date().isoformat()
     existing = read_agent_memory()
@@ -238,7 +249,7 @@ def consolidate_experience(conn, cfg: dict[str, Any], now_ts: float | None = Non
     summary = llm.call_text(
         model=model,
         system=(
-            "你是 OSS PR Agent 的经验压缩器。输入包含旧经验记录和今天新日记。"
+            "你是 OSS PR Agent 的梦游（Sleepwalking）经验整理器。输入包含旧经验记录和今天新日记。"
             "请压缩、总结、提炼为一份长期可执行经验手册，用中文 Markdown 输出。"
             "保留对后续 planner 决策和 Codex 写 PR/修 PR 最有用的规则，删除流水账、重复项和已经无用的细节。"
             "重点覆盖：选题策略、仓库筛选、CI/测试经验、PR 失败原因、避免重复犯错的方法。"
@@ -249,7 +260,11 @@ def consolidate_experience(conn, cfg: dict[str, Any], now_ts: float | None = Non
             "# 今天新日记\n\n"
             f"{diary or '无'}\n"
         ),
-        max_tokens=int(agent_cfg.get("experience_consolidation_max_tokens", 1800) or 1800),
+        max_tokens=int(
+            agent_cfg.get("sleepwalking_max_tokens")
+            or agent_cfg.get("experience_consolidation_max_tokens", 1800)
+            or 1800
+        ),
         temperature=0.2,
     )
     if not summary:
@@ -259,9 +274,13 @@ def consolidate_experience(conn, cfg: dict[str, Any], now_ts: float | None = Non
         summary = "# OSS PR Agent 经验记录\n\n" + summary
     agent_path = _agent_md_path()
     agent_path.write_text(summary.rstrip() + "\n", encoding="utf-8")
-    state.set_meta(conn, "experience_consolidation_last_date", day)
+    state.set_meta(conn, "sleepwalking_last_date", day)
     return {
         "day": day,
         "summary": summary.rstrip() + "\n",
         "agent_path": str(agent_path),
     }
+
+
+consolidation_due = sleepwalking_due
+consolidate_experience = run_sleepwalking

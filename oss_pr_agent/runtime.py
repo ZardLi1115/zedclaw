@@ -600,10 +600,10 @@ def tick_once() -> dict[str, Any]:
                 notifier.notify_daily_review(cfg, review)
                 notifier.notify_goodnight(cfg)
                 return {"status": "daily_review_completed"}
-            if daily_review.consolidation_due(conn, cfg):
-                summary = daily_review.consolidate_experience(conn, cfg)
-                notifier.notify_experience_consolidated(cfg, summary)
-                return {"status": "experience_consolidated"}
+            if daily_review.sleepwalking_due(conn, cfg):
+                summary = daily_review.run_sleepwalking(conn, cfg)
+                notifier.notify_sleepwalking_completed(cfg, summary)
+                return {"status": "sleepwalking_completed"}
 
             now = time.time()
             sleep_end = _sleep_end_timestamp(cfg, now)
