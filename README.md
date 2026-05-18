@@ -27,6 +27,10 @@ The project keeps the interactive agent experience, terminal tools, messaging ga
 
 The name comes from Zed, the Master of Shadows in *League of Legends*: ZedClaw is meant to act like a digital shadow clone for the user, spending tokens to complete pull-request work while the user stays focused on higher-level decisions.
 
+Issues and pull requests are welcome!
+
+This project has been published in the [LINUX DO community](https://linux.do). Thanks to the community for its support and feedback.
+
 ## Highlights
 
 | Capability | What it does |

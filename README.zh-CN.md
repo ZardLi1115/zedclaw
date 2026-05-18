@@ -27,6 +27,10 @@ ZedClaw 是一个面向自动化开源贡献的 Coding Agent Runtime。它可以
 
 ZedClaw 的命名来自游戏《英雄联盟》中的“影流之主 劫”：它希望成为用户的数字分身，替用户消耗 token，执行提交 PR 等需要持续投入的任务。
 
+欢迎提交 Issue 和 Pull Request！
+
+本项目已在 [LINUX DO 社区](https://linux.do) 发布，感谢社区的支持与反馈。
+
 ## 核心能力
 
 | 能力 | 说明 |
