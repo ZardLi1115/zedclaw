@@ -55,12 +55,50 @@ def _set_next_wake(conn, cfg: dict[str, Any], delay_seconds: float, reason: str)
 
 
 def _budget_aggression(budget: dict[str, Any]) -> tuple[str, float]:
-    text = json.dumps(budget, ensure_ascii=False).lower()
-    if any(x in text for x in ("unknown", "error")):
+    state_text = _budget_state(budget)
+    if state_text == "exhausted":
+        return "low", 0.75
+    if state_text == "unknown":
         return "normal", 0.55
-    if any(x in text for x in ("reset", "remaining", "quota", "limit")):
+    if state_text == "available":
         return "high", 0.42
     return "max", 0.35
+
+
+def _budget_state(budget: dict[str, Any]) -> str:
+    """Classify budget telemetry without treating missing data as exhaustion."""
+    if not budget or str(budget.get("status") or "").lower() == "unknown":
+        return "unknown"
+    text = json.dumps(budget, ensure_ascii=False).lower()
+    if any(token in text for token in ("exhausted", "quota_exceeded", "rate_limit_exceeded", "insufficient_quota")):
+        return "exhausted"
+
+    def walk(value: Any, parent: str = "") -> str | None:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                found = walk(child, str(key).lower())
+                if found:
+                    return found
+            return None
+        if isinstance(value, list):
+            for child in value:
+                found = walk(child, parent)
+                if found:
+                    return found
+            return None
+        key = parent.lower()
+        if isinstance(value, (int, float)):
+            if any(name in key for name in ("remaining", "available", "left", "balance")):
+                return "available" if float(value) > 0 else "exhausted"
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"unknown", "unavailable", "n/a", "none"}:
+                return "unknown"
+            if lowered in {"exhausted", "depleted", "quota_exceeded", "rate_limit_exceeded"}:
+                return "exhausted"
+        return None
+
+    return walk(budget) or ("available" if any(x in text for x in ("reset", "remaining", "quota", "limit")) else "unknown")
 
 
 def _planner_decision(cfg: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
@@ -344,6 +382,24 @@ def _monitor_active_prs(conn, cfg: dict[str, Any]) -> list[dict[str, Any]]:
             )
             notifier.notify_status_changed(cfg, task, old_status, "MERGED", "PR merged.")
             updates.append({"task": task["id"], "status": "MERGED"})
+        elif str(status.get("state") or "").upper() == "CLOSED":
+            old_status = task.get("status")
+            reason = "PR was closed without merge."
+            state.update_task(conn, task["id"], status="CLOSED_UNMERGED", failure_reason=reason)
+            task["status"] = "CLOSED_UNMERGED"
+            state.add_human_review_item(
+                conn,
+                source="runtime",
+                source_id=task["id"],
+                repo=task["repo"],
+                pr_number=task.get("pr_number"),
+                subject=task.get("title"),
+                reason=reason,
+                summary=json.dumps(status, ensure_ascii=False)[:2000],
+            )
+            notifier.notify_failed_human(cfg, task, reason)
+            notifier.notify_status_changed(cfg, task, old_status, "CLOSED_UNMERGED", reason)
+            updates.append({"task": task["id"], "status": "CLOSED_UNMERGED"})
         elif github_ops.checks_failed(status):
             if int(task.get("fix_attempts") or 0) >= int(task.get("max_fix_attempts") or 5):
                 old_status = task.get("status")
@@ -537,6 +593,7 @@ def tick_once() -> dict[str, Any]:
             max_active_prs = int(_agent_cfg(cfg).get("max_active_prs", 999) or 999)
 
             budget = github_ops.budget_snapshot(cfg)
+            budget_state = _budget_state(budget)
             aggression, min_score = _budget_aggression(budget)
             candidates = github_ops.discover_issues(cfg, min_score=min_score)
             active_keys = {
@@ -550,6 +607,7 @@ def tick_once() -> dict[str, Any]:
             context = {
                 "time": _now_iso(),
                 "budget": budget,
+                "budget_state": budget_state,
                 "aggression": aggression,
                 "min_score": min_score,
                 "recent_email_items": email_items[:5],
@@ -562,15 +620,27 @@ def tick_once() -> dict[str, Any]:
             decision = _planner_decision(cfg, context)
             delay_minutes = float(decision.get("next_wake_delay_minutes") or (45 if candidates else 120))
             action = str(decision.get("action") or ("start_task" if candidates else "sleep")).strip().lower()
-            if action in {"start_task", "start_new_task", "start_new", "start_candidate", "open_pr", "run_codex", "start_pr"} and candidates:
+            active_slots_available = len(waiting_prs) < max_active_prs
+            if budget_state == "exhausted":
+                _set_next_wake(conn, cfg, delay_minutes * 60, decision.get("reason") or "budget exhausted")
+                return {"status": "planned_sleep", "decision": decision, "budget_state": budget_state, "candidates": len(candidates)}
+            if action in {"sleep", "wait", "planned_sleep"} and candidates and active_slots_available and budget_state == "unknown":
+                action = "start_task"
+                decision = {
+                    **decision,
+                    "action": action,
+                    "reason": "Budget telemetry is unknown, not exhausted; active PR slots and candidates are available.",
+                }
+            if action in {"start_task", "start_new_task", "start_new", "start_candidate", "open_pr", "run_codex", "start_pr"} and candidates and active_slots_available:
                 idx = int(decision.get("candidate_index") or 0)
                 idx = min(max(idx, 0), len(candidates) - 1)
                 _run_new_task(conn, cfg, candidates[idx])
                 _set_next_wake(conn, cfg, 20 * 60, "check newly opened PR")
                 return {"status": "task_started", "candidate": candidates[idx], "decision": decision}
 
-            _set_next_wake(conn, cfg, delay_minutes * 60, decision.get("reason") or "planner sleep")
-            return {"status": "planned_sleep", "decision": decision, "candidates": len(candidates)}
+            reason = decision.get("reason") or ("active PR slot limit reached" if candidates and not active_slots_available else "planner sleep")
+            _set_next_wake(conn, cfg, delay_minutes * 60, reason)
+            return {"status": "planned_sleep", "decision": decision, "budget_state": budget_state, "candidates": len(candidates)}
 
 
 async def async_tick_once() -> dict[str, Any]:

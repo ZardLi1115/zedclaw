@@ -262,8 +262,246 @@ def checks_passed(status: dict[str, Any]) -> bool:
     return not checks_failed(status) and not checks_pending(status)
 
 
+def _read_cpa_config(path: str | None = None) -> dict[str, Any]:
+    cfg_path = Path(path or "/opt/cliproxyapi/config.yaml").expanduser()
+    if not cfg_path.exists():
+        return {}
+    data: dict[str, Any] = {"config_path": str(cfg_path)}
+    section: str | None = None
+    for raw in cfg_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if indent == 0 and stripped.endswith(":"):
+            section = stripped[:-1]
+            continue
+        if ":" not in stripped:
+            continue
+        key, value = stripped.split(":", 1)
+        value = value.strip().strip("'\"")
+        if indent == 0:
+            data[key.strip()] = value
+            section = key.strip()
+        elif section == "remote-management" and key.strip() == "secret-key":
+            data["management_key"] = value
+        elif key.strip() == "auth-dir":
+            data["auth_dir"] = value
+    return data
+
+
+def _load_codex_budget_auths(agent_cfg: dict[str, Any], cpa_cfg: dict[str, Any]) -> list[dict[str, Any]]:
+    explicit_file = str(agent_cfg.get("cpa_codex_auth_file") or "").strip()
+    auth_dir = Path(str(agent_cfg.get("cpa_auth_dir") or cpa_cfg.get("auth_dir") or "~/.cli-proxy-api")).expanduser()
+    candidates = [Path(explicit_file).expanduser()] if explicit_file else sorted(auth_dir.glob("codex-*.json"))
+    wanted_emails = {
+        email.strip().lower()
+        for email in re.split(r"[\s,]+", str(agent_cfg.get("cpa_codex_auth_email") or agent_cfg.get("codex_budget_email") or ""))
+        if email.strip()
+    }
+    explicit_index = str(agent_cfg.get("cpa_codex_auth_index") or "").strip()
+    explicit_account = str(agent_cfg.get("cpa_codex_account_id") or "").strip()
+    usable: list[tuple[int, Path, dict[str, Any], dict[str, Any]]] = []
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if data.get("disabled"):
+            continue
+        email = str(data.get("email") or "").lower()
+        if wanted_emails and email not in wanted_emails:
+            continue
+        plan_hint = f"{path.name} {data.get('plan_type') or data.get('planType') or ''}".lower()
+        priority = 0
+        if "team" in plan_hint:
+            priority = 30
+        elif "plus" in plan_hint or "pro" in plan_hint:
+            priority = 20
+        elif "free" in plan_hint:
+            priority = 5
+        auth_index = str(explicit_index or data.get("auth_index") or data.get("authIndex") or path.name)
+        auth = {
+            "auth_index": auth_index,
+            "auth_index_fallbacks": [auth_index, path.name, path.stem],
+            "account_id": str(explicit_account or data.get("account_id") or ""),
+            "email": data.get("email"),
+            "file": str(path),
+            "priority": priority,
+        }
+        usable.append((priority, path, data, auth))
+    if not usable:
+        return []
+    return [auth for _, _, _, auth in sorted(usable, key=lambda item: (-item[0], item[1].name))]
+
+
+def _extract_cpa_budget_windows(data: dict[str, Any]) -> list[dict[str, Any]]:
+    rate_limit = data.get("rate_limit") or data.get("rateLimit") or {}
+    review_limit = data.get("code_review_rate_limit") or data.get("codeReviewRateLimit") or {}
+    additional = data.get("additional_rate_limits") or data.get("additionalRateLimits") or []
+    specs = [
+        ("codex_5h", rate_limit.get("primary_window") or rate_limit.get("primaryWindow")),
+        ("codex_weekly", rate_limit.get("secondary_window") or rate_limit.get("secondaryWindow")),
+        ("review_5h", review_limit.get("primary_window") or review_limit.get("primaryWindow")),
+        ("review_weekly", review_limit.get("secondary_window") or review_limit.get("secondaryWindow")),
+    ]
+    for index, item in enumerate(additional if isinstance(additional, list) else []):
+        limit = item.get("rate_limit") or item.get("rateLimit") or {}
+        name = item.get("limit_name") or item.get("limitName") or item.get("metered_feature") or item.get("meteredFeature") or f"additional_{index + 1}"
+        specs.append((f"{name}_5h", limit.get("primary_window") or limit.get("primaryWindow")))
+        specs.append((f"{name}_weekly", limit.get("secondary_window") or limit.get("secondaryWindow")))
+    windows: list[dict[str, Any]] = []
+    for name, window in specs:
+        if not isinstance(window, dict):
+            continue
+        used_percent = window.get("used_percent", window.get("usedPercent"))
+        limit_seconds = window.get("limit_window_seconds", window.get("limitWindowSeconds"))
+        reset_at = window.get("reset_at") or window.get("resetAt") or window.get("resets_at") or window.get("resetsAt")
+        entry = {
+            "name": name,
+            "used_percent": used_percent,
+            "remaining_percent": None,
+            "limit_window_seconds": limit_seconds,
+            "reset_at": reset_at,
+        }
+        try:
+            entry["remaining_percent"] = max(0.0, 100.0 - float(used_percent))
+        except Exception:
+            pass
+        windows.append(entry)
+    return windows
+
+
+def _window_remaining_sum(accounts: list[dict[str, Any]]) -> dict[str, float]:
+    totals: dict[str, float] = {}
+    for account in accounts:
+        for window in account.get("windows") or []:
+            name = window.get("name")
+            remaining = window.get("remaining_percent")
+            if not name or remaining is None:
+                continue
+            try:
+                totals[str(name)] = totals.get(str(name), 0.0) + float(remaining)
+            except Exception:
+                continue
+    return totals
+
+
+def _query_cpa_wham_usage(base: str, key: str, auth: dict[str, Any]) -> dict[str, Any]:
+    import urllib.request
+
+    headers = {
+        "Authorization": "Bearer $TOKEN$",
+        "Content-Type": "application/json",
+        "User-Agent": "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal",
+    }
+    if auth.get("account_id"):
+        headers["Chatgpt-Account-Id"] = auth["account_id"]
+    last_error = ""
+    for auth_index in dict.fromkeys(auth.get("auth_index_fallbacks") or [auth["auth_index"]]):
+        payload = {
+            "authIndex": auth_index,
+            "method": "GET",
+            "url": "https://chatgpt.com/backend-api/wham/usage",
+            "header": headers,
+        }
+        req = urllib.request.Request(
+            f"{base}/api-call",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                raw = resp.read(100000).decode("utf-8", errors="replace")
+            outer = json.loads(raw or "{}")
+            status_code = int(outer.get("status_code") or outer.get("statusCode") or 0)
+            body = outer.get("body")
+            if isinstance(body, str):
+                body_data = json.loads(body) if body.strip().startswith(("{", "[")) else {"raw": body}
+            elif isinstance(body, dict):
+                body_data = body
+            else:
+                body_data = {}
+            if 200 <= status_code < 300 and isinstance(body_data, dict):
+                return {
+                    "status": "ok",
+                    "auth_email": auth.get("email"),
+                    "auth_index": auth_index,
+                    "account_id": auth.get("account_id"),
+                    "plan_type": body_data.get("plan_type") or body_data.get("planType"),
+                    "windows": _extract_cpa_budget_windows(body_data),
+                    "data": body_data,
+                }
+            last_error = f"api-call returned {status_code}: {str(body)[:500]}"
+        except Exception as exc:
+            last_error = str(exc)
+    return {
+        "status": "unknown",
+        "auth_email": auth.get("email"),
+        "account_id": auth.get("account_id"),
+        "error": last_error,
+    }
+
+
+def _cpa_budget_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
+    agent_cfg = cfg.get("oss_pr_agent", {}) if isinstance(cfg, dict) else {}
+    cpa_cfg = _read_cpa_config(str(agent_cfg.get("cpa_config_path") or "").strip() or None)
+    base = str(
+        agent_cfg.get("cpa_management_base_url")
+        or agent_cfg.get("cpa_management_url")
+        or cpa_cfg.get("management_base_url")
+        or ""
+    ).strip().rstrip("/")
+    if not base and cpa_cfg:
+        host = str(cpa_cfg.get("host") or "127.0.0.1").strip() or "127.0.0.1"
+        port = str(cpa_cfg.get("port") or "8317").strip() or "8317"
+        base = f"http://{host}:{port}/v0/management"
+    if base and not base.endswith("/v0/management"):
+        base = f"{base}/v0/management"
+    key = str(agent_cfg.get("cpa_management_key") or cpa_cfg.get("management_key") or "").strip()
+    auths = _load_codex_budget_auths(agent_cfg, cpa_cfg)
+    if not base or not key or not auths:
+        return {
+            "status": "unknown",
+            "source": "cpa_management",
+            "reason": "missing CPA management base/key or Codex auth file",
+        }
+
+    accounts = [_query_cpa_wham_usage(base, key, auth) for auth in auths]
+    ok_accounts = [account for account in accounts if account.get("status") == "ok"]
+    if ok_accounts:
+        return {
+            "status": "ok",
+            "source": "cpa_wham_usage_pool",
+            "account_count": len(accounts),
+            "available_account_count": len(ok_accounts),
+            "window_remaining_percent_sum": _window_remaining_sum(ok_accounts),
+            "accounts": ok_accounts,
+            "failed_accounts": [account for account in accounts if account.get("status") != "ok"],
+        }
+    return {
+        "status": "unknown",
+        "source": "cpa_wham_usage_pool",
+        "account_count": len(accounts),
+        "accounts": accounts,
+        "error": "; ".join(str(account.get("error") or "") for account in accounts if account.get("error"))[:1000],
+    }
+
+
 def budget_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
     agent_cfg = cfg.get("oss_pr_agent", {}) if isinstance(cfg, dict) else {}
+    if (
+        agent_cfg.get("cpa_budget_enabled", True)
+        and (
+            agent_cfg.get("cpa_management_base_url")
+            or agent_cfg.get("cpa_management_url")
+            or Path(str(agent_cfg.get("cpa_config_path") or "/opt/cliproxyapi/config.yaml")).expanduser().exists()
+        )
+    ):
+        budget = _cpa_budget_snapshot(cfg)
+        if budget.get("status") != "unknown" or not agent_cfg.get("budget_url"):
+            return budget
     url = str(agent_cfg.get("budget_url") or "").strip()
     if not url:
         model_cfg = cfg.get("model", {}) if isinstance(cfg, dict) else {}
