@@ -204,6 +204,7 @@ all = [
   "zedclaw[homeassistant]",
   "zedclaw[sms]",
   "zedclaw[acp]",
+  "zedclaw[bedrock]",
   "zedclaw[google]",
   "zedclaw[web]",
   "zedclaw[youtube]",

@@ -66,6 +66,8 @@ source .venv/bin/activate
 pip install -e ".[all,dev]"
 ```
 
+On Windows, you can use the PowerShell installer at `scripts/install.ps1`.
+
 Start the CLI:
 
 ```bash

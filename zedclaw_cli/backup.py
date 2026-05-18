@@ -59,6 +59,7 @@ _EXCLUDED_SUFFIXES = (
 _EXCLUDED_NAMES = {
     "gateway.pid",
     "cron.pid",
+    "zedclaw_state.db",
 }
 
 # zipfile.open() drops Unix mode bits on extract; restore tightens these to 0600.

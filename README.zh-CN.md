@@ -66,6 +66,8 @@ source .venv/bin/activate
 pip install -e ".[all,dev]"
 ```
 
+Windows 用户可以使用 PowerShell 安装脚本：`scripts/install.ps1`。
+
 启动 CLI：
 
 ```bash
