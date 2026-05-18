@@ -4,7 +4,7 @@ let
   src = ../ui-tui;
   npmDeps = pkgs.fetchNpmDeps {
     inherit src;
-    hash = "sha256-9r1EYQ600gNXOnNXwakorpEk7hS/FPxZVbB2JksrhYs=";
+    hash = "sha256-NpuD8yaSzQ9jAkrTGjbNFF+0/jfvxCajYhgFe7Zh7j0=";
   };
 
   npm = zedclawNpmLib.mkNpmPassthru { folder = "ui-tui"; attr = "tui"; pname = "zedclaw-tui"; };
