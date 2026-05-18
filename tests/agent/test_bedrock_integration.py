@@ -256,17 +256,17 @@ class TestPackaging:
     """Verify bedrock optional dependency is declared."""
 
     def test_bedrock_extra_exists(self):
-        import configparser
         from pathlib import Path
         # Read pyproject.toml to verify [bedrock] extra
         toml_path = Path(__file__).parent.parent.parent / "pyproject.toml"
         content = toml_path.read_text()
         assert 'bedrock = ["boto3' in content
 
-    def test_bedrock_in_all_extra(self):
+    def test_bedrock_extra_stays_lazy(self):
         from pathlib import Path
         content = (Path(__file__).parent.parent.parent / "pyproject.toml").read_text()
-        assert '"zedclaw[bedrock]"' in content
+        assert '"zedclaw[bedrock]"' not in content
+        assert "bedrock, tts-premium" in content
 
 
 # ---------------------------------------------------------------------------
