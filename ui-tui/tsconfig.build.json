@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@zedclaw/ink": ["src/types/zedclaw-ink.d.ts"]
+    }
+  }
+}

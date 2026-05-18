@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export OPENAI_API_KEY="${OPENAI_API_KEY:-cpa_52bb3e93b33fe19c5f4a616bb70b25bd102bc99ea693334d}"
+exec /usr/local/bin/codex exec \
+  -m gpt-5.5 \
+  -c model_reasoning_effort="medium" \
+  --skip-git-repo-check \
+  "$@"
