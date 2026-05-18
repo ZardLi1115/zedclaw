@@ -16,6 +16,21 @@ def _run_dir(task_id: str) -> Path:
     return path
 
 
+def _with_agent_experience(prompt: str) -> str:
+    path = state.agent_home() / "agent.md"
+    if not path.exists():
+        return prompt
+    memory = path.read_text(encoding="utf-8", errors="replace").strip()
+    if not memory:
+        return prompt
+    return (
+        "# OSS PR Agent Long-Term Experience\n\n"
+        f"{memory}\n\n"
+        "# Current Task Instructions\n\n"
+        f"{prompt}"
+    )
+
+
 def run_codex(*, task: dict[str, Any], cfg: dict[str, Any], prompt: str, kind: str) -> dict[str, Any]:
     agent_cfg = cfg.get("oss_pr_agent", {}) if isinstance(cfg, dict) else {}
     codex_bin = str(agent_cfg.get("codex_path") or "codex")
@@ -27,6 +42,7 @@ def run_codex(*, task: dict[str, Any], cfg: dict[str, Any], prompt: str, kind: s
     prompt_path = run_dir / "prompt.md"
     result_path = run_dir / "result.md"
     log_path = run_dir / "codex.log"
+    prompt = _with_agent_experience(prompt)
     prompt_path.write_text(prompt, encoding="utf-8")
     cmd = [
         codex_bin,
@@ -111,4 +127,3 @@ Rules:
 - Inspect CI/check failures, run targeted tests locally, commit, and push to the same PR branch.
 - If the failure cannot be fixed in this repository context, explain why and stop.
 """
-

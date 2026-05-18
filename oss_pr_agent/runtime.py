@@ -166,7 +166,8 @@ def _planner_decision(cfg: dict[str, Any], context: dict[str, Any]) -> dict[str,
             "opening and improving more PRs when budget is available, while prioritizing "
             "existing PR fixes before new tasks. Treat unknown or 404 budget telemetry "
             "as unknown, not exhausted; when active PR slots are available and candidates "
-            "exist, prefer starting another task unless a PR needs fixing now."
+            "exist, prefer starting another task unless a PR needs fixing now. Apply the "
+            "agent_experience_md field as long-term operating guidance."
         ),
         user=json.dumps(context, ensure_ascii=False),
         max_tokens=700,
@@ -594,10 +595,15 @@ def tick_once() -> dict[str, Any]:
             return {"status": "locked"}
 
         with state.connect() as conn:
-            if daily_review.due() and not daily_review.already_ran_today(conn):
+            if daily_review.due(cfg) and not daily_review.already_ran_today(conn, cfg):
                 review = daily_review.run_daily_review(conn, cfg)
                 notifier.notify_daily_review(cfg, review)
+                notifier.notify_goodnight(cfg)
                 return {"status": "daily_review_completed"}
+            if daily_review.consolidation_due(conn, cfg):
+                summary = daily_review.consolidate_experience(conn, cfg)
+                notifier.notify_experience_consolidated(cfg, summary)
+                return {"status": "experience_consolidated"}
 
             now = time.time()
             sleep_end = _sleep_end_timestamp(cfg, now)
@@ -676,6 +682,7 @@ def tick_once() -> dict[str, Any]:
                 "active_prs": waiting_prs[:5],
                 "max_active_prs": max_active_prs,
                 "candidates": candidates[:8],
+                "agent_experience_md": daily_review.read_agent_memory(),
             }
             decision = _planner_decision(cfg, context)
             delay_minutes = float(decision.get("next_wake_delay_minutes") or (45 if candidates else 120))

@@ -175,6 +175,22 @@ def notify_daily_review(cfg: dict[str, Any], review: dict[str, str]) -> None:
     _send_long(cfg, lessons_header, review.get("lessons") or "")
 
 
+def notify_experience_consolidated(cfg: dict[str, Any], summary: dict[str, str]) -> None:
+    if _language() == "zh":
+        header = f"OSS PR Agent 已完成阶段性经验压缩，写入 {summary.get('agent_path')}"
+    else:
+        header = f"OSS PR Agent consolidated long-term lessons into {summary.get('agent_path')}"
+    _send_long(cfg, header, summary.get("summary") or "")
+
+
+def notify_goodnight(cfg: dict[str, Any]) -> None:
+    if _language() == "zh":
+        message = "晚安。OSS PR Agent 已完成睡前复盘，本 agent 也要休息了。\n写代码虽好，可不要贪杯呦。"
+    else:
+        message = "Good night. OSS PR Agent has completed its pre-sleep review and is going to rest."
+    send(cfg, message)
+
+
 def notify_failed_human(cfg: dict[str, Any], task: dict[str, Any], reason: str) -> None:
     if _language() == "zh":
         lines = [

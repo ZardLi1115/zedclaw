@@ -1,7 +1,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from oss_pr_agent import runtime
+from oss_pr_agent import daily_review, runtime
 
 
 def _cfg(**overrides):
@@ -54,3 +54,10 @@ def test_apply_sleep_window_moves_wake_to_sleep_end():
     adjusted = runtime._apply_sleep_window(cfg, target)
 
     assert datetime.fromtimestamp(adjusted, ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M") == "2026-05-19 09:00"
+
+
+def test_daily_review_due_one_minute_before_sleep():
+    cfg = _cfg(sleep_start="22:00")
+
+    assert daily_review.due(cfg, _ts("2026-05-18T21:59:00+08:00"))
+    assert not daily_review.due(cfg, _ts("2026-05-18T21:58:59+08:00"))

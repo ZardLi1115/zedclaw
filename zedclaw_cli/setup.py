@@ -2803,6 +2803,15 @@ def setup_oss_pr_agent(config: dict):
         agent_cfg.pop("sleep_start", None)
         agent_cfg.pop("sleep_end", None)
 
+    consolidation_days = prompt(
+        "Experience consolidation interval in days",
+        str(agent_cfg.get("experience_consolidation_days") or 3),
+    ).strip()
+    try:
+        agent_cfg["experience_consolidation_days"] = max(1, int(consolidation_days))
+    except ValueError:
+        print_warning("Invalid consolidation interval; keeping previous value.")
+
     current_focus = str(agent_cfg.get("focus") or "all").strip() or "all"
     focus_default = 0 if current_focus.lower() == "all" else 1
     focus_idx = prompt_choice(
