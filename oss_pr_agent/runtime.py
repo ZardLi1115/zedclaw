@@ -101,14 +101,20 @@ def _handle_email_items(conn, cfg: dict[str, Any], items: list[dict[str, Any]]) 
         repo = item.get("repo") or ""
         pr_number = item.get("pr_number")
         if intent == "pr_merged" and repo and pr_number:
+            pr_url = item.get("github_url") or f"https://github.com/{repo}/pull/{pr_number}"
+            status = github_ops.pr_status(pr_url)
+            if not (status.get("mergedAt") or str(status.get("state") or "").upper() == "MERGED"):
+                conn.execute("UPDATE email_list SET action_taken='merge_unverified' WHERE id=?", (item.get("id"),))
+                conn.commit()
+                continue
             state.mark_merged(
                 conn,
                 repo=repo,
                 pr_number=int(pr_number),
-                pr_url=item.get("github_url") or f"https://github.com/{repo}/pull/{pr_number}",
+                pr_url=pr_url,
                 source_email_id=item.get("id"),
                 summary=item.get("summary") or "",
-                merged_at=_now_iso(),
+                merged_at=status.get("mergedAt") or _now_iso(),
             )
             conn.execute("UPDATE email_list SET action_taken='marked_merged' WHERE id=?", (item.get("id"),))
             conn.commit()
