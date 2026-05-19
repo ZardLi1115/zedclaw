@@ -117,6 +117,7 @@ CLI 与消息端常用斜杠指令：
 | `/osspr` | 查看 OSS PR Agent Runtime 状态、当前任务、已提交 PR 数、已记录合并 PR 数和下次唤醒时间。 |
 | `/humanreview` | 查看真实需要人工处理的待办事项。 |
 | `/language` | 在中文和英文之间切换 OSS PR Agent 的用户可见输出。 |
+| `/method` | 更换寻找 issue 的主题，例如 `/method all` 或 `/method eval harness`。 |
 | `/status` | 查看消息平台状态，具体取决于平台支持。 |
 | `/new` | 开启新会话。 |
 | `/model` | 切换当前模型。 |

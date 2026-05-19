@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import re
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from zedclaw_cli.config import load_config
+from zedclaw_cli.config import load_config, save_config
 
 from . import github_ops, state
 
@@ -206,6 +207,62 @@ def set_language(lang: str) -> str:
         raise ValueError("Unsupported language. Use zh or en.")
     with state.connect() as conn:
         state.set_meta(conn, "osspr_language", normalized)
+    return normalized
+
+
+def _split_method_terms(value: str) -> list[str]:
+    terms: list[str] = []
+    for part in re.split(r"[,;\n]+", value or ""):
+        cleaned = " ".join(part.strip().split())
+        if cleaned:
+            terms.append(cleaned)
+    return terms
+
+
+def _queries_from_method_terms(terms: list[str]) -> tuple[list[str], list[str]]:
+    queries: list[str] = []
+    fallback: list[str] = []
+    for term in terms:
+        queries.extend([
+            f'{term} label:"good first issue"',
+            f"{term} label:bug",
+            f"{term} help wanted",
+        ])
+        fallback.extend([
+            term,
+            f"{term} bug",
+        ])
+    return queries, fallback
+
+
+def get_method() -> str:
+    cfg = load_config()
+    agent_cfg = cfg.get("oss_pr_agent", {}) if isinstance(cfg, dict) else {}
+    return str(agent_cfg.get("focus") or "all").strip() or "all"
+
+
+def set_method(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("Missing method. Use /method all or /method <theme>.")
+    cfg = load_config()
+    agent_cfg = cfg.setdefault("oss_pr_agent", {})
+    if raw.lower() == "all":
+        agent_cfg["focus"] = "all"
+        agent_cfg.pop("repository_queries", None)
+        agent_cfg.pop("fallback_repository_queries", None)
+        save_config(cfg)
+        return "all"
+
+    terms = _split_method_terms(raw)
+    if not terms:
+        raise ValueError("Missing method. Use /method all or /method <theme>.")
+    queries, fallback_queries = _queries_from_method_terms(terms)
+    normalized = ", ".join(terms)
+    agent_cfg["focus"] = normalized
+    agent_cfg["repository_queries"] = queries
+    agent_cfg["fallback_repository_queries"] = fallback_queries
+    save_config(cfg)
     return normalized
 
 

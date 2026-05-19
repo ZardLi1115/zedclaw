@@ -6216,6 +6216,8 @@ class GatewayRunner:
                     return await self._handle_humanreview_command(event)
                 if _cmd_def_inner.name == "language":
                     return await self._handle_language_command(event)
+                if _cmd_def_inner.name == "method":
+                    return await self._handle_method_command(event)
                 if _cmd_def_inner.name == "update":
                     return await self._handle_update_command(event)
 
@@ -6467,6 +6469,9 @@ class GatewayRunner:
 
         if canonical == "language":
             return await self._handle_language_command(event)
+
+        if canonical == "method":
+            return await self._handle_method_command(event)
 
         if canonical == "agents":
             return await self._handle_agents_command(event)
@@ -8612,6 +8617,30 @@ class GatewayRunner:
         except Exception as exc:
             logger.warning("oss_pr_agent language command failed: %s", exc, exc_info=True)
             return f"OSS PR Agent language setting failed: {exc}"
+
+    async def _handle_method_command(self, event: MessageEvent) -> str:
+        """Handle /method for OSS PR Agent issue-search focus."""
+        try:
+            from oss_pr_agent.status import get_language, get_method, set_method
+
+            arg = event.get_command_args().strip()
+            lang = await asyncio.to_thread(get_language)
+            if not arg:
+                current = await asyncio.to_thread(get_method)
+                if lang == "zh":
+                    return f"当前寻找 issue 的主题：{current}。用法：`/method all` 或 `/method <主题>`。"
+                return f"Current issue search method: {current}. Use `/method all` or `/method <theme>`."
+            selected = await asyncio.to_thread(set_method, arg)
+            if lang == "zh":
+                if selected == "all":
+                    return "寻找 issue 的主题已切换为：全部默认方向。"
+                return f"寻找 issue 的主题已切换为：{selected}。"
+            if selected == "all":
+                return "Issue search method set to all default directions."
+            return f"Issue search method set to: {selected}."
+        except Exception as exc:
+            logger.warning("oss_pr_agent method command failed: %s", exc, exc_info=True)
+            return f"OSS PR Agent method setting failed: {exc}"
 
     async def _handle_agents_command(self, event: MessageEvent) -> str:
         """Handle /agents command - list active agents and running tasks."""

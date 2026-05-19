@@ -117,6 +117,7 @@ Messaging and CLI slash commands:
 | `/osspr` | Show OSS PR Agent runtime status, active task, PR count, merged PR count, and next wake time. |
 | `/humanreview` | Show real human-review items that require operator action. |
 | `/language` | Switch OSS PR Agent user-facing output between English and Chinese. |
+| `/method` | Change the issue search theme, for example `/method all` or `/method eval harness`. |
 | `/status` | Show messaging platform status where supported. |
 | `/new` | Start a new conversation. |
 | `/model` | Change the active model. |
