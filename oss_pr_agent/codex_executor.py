@@ -88,13 +88,21 @@ def run_codex(*, task: dict[str, Any], cfg: dict[str, Any], prompt: str, kind: s
 
 
 def initial_prompt(task: dict[str, Any]) -> str:
+    preferred_plan = task.get("preferred_plan") or {}
+    preferred_context = ""
+    if preferred_plan:
+        preferred_context = f"""
+User-approved preferred plan:
+{preferred_plan}
+"""
     return f"""You are an autonomous open-source contribution worker.
 
-Goal: solve exactly this GitHub issue and open a PR.
+Goal: solve exactly this GitHub issue or user-approved preferred plan and open a PR.
 
 Repository: {task['repo']}
 Issue: {task.get('issue_url') or task.get('issue_number')}
 Title: {task.get('title')}
+{preferred_context}
 
 Rules:
 - Read the issue and repository contribution guidance first.

@@ -105,6 +105,19 @@ def init_db(conn: sqlite3.Connection) -> None:
             result_path TEXT,
             error TEXT
         );
+        CREATE TABLE IF NOT EXISTS preferred_plans (
+            id TEXT PRIMARY KEY,
+            repo TEXT NOT NULL,
+            repo_url TEXT NOT NULL,
+            status TEXT NOT NULL,
+            title TEXT,
+            issue_url TEXT,
+            issue_number INTEGER,
+            score REAL NOT NULL DEFAULT 0,
+            plan_json TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
         """
     )
     conn.commit()
@@ -181,6 +194,72 @@ def update_task(conn: sqlite3.Connection, task_id: str, **fields: Any) -> None:
     assignments = ", ".join(f"{key}=:{key}" for key in fields)
     conn.execute(f"UPDATE tasks SET {assignments} WHERE id=:id", {"id": task_id, **fields})
     conn.commit()
+
+
+def upsert_preferred_plan(conn: sqlite3.Connection, plan: dict[str, Any]) -> None:
+    now = time.time()
+    existing = conn.execute("SELECT id, created_at FROM preferred_plans WHERE id=?", (plan["id"],)).fetchone()
+    data = {
+        "repo": plan.get("repo", ""),
+        "repo_url": plan.get("repo_url", ""),
+        "status": plan.get("status", "pending_approval"),
+        "title": plan.get("title"),
+        "issue_url": plan.get("issue_url"),
+        "issue_number": plan.get("issue_number"),
+        "score": float(plan.get("score", 0) or 0),
+        "plan_json": json.dumps(plan.get("plan_json") or {}, ensure_ascii=False),
+        "updated_at": now,
+    }
+    if existing:
+        conn.execute(
+            """
+            UPDATE preferred_plans SET repo=:repo, repo_url=:repo_url, status=:status,
+                title=:title, issue_url=:issue_url, issue_number=:issue_number,
+                score=:score, plan_json=:plan_json, updated_at=:updated_at
+            WHERE id=:id
+            """,
+            {"id": plan["id"], **data},
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO preferred_plans(id, repo, repo_url, status, title, issue_url,
+                issue_number, score, plan_json, created_at, updated_at)
+            VALUES (:id, :repo, :repo_url, :status, :title, :issue_url,
+                :issue_number, :score, :plan_json, :created_at, :updated_at)
+            """,
+            {"id": plan["id"], "created_at": now, **data},
+        )
+    conn.commit()
+
+
+def update_preferred_plan(conn: sqlite3.Connection, plan_id: str, **fields: Any) -> None:
+    if not fields:
+        return
+    fields["updated_at"] = time.time()
+    assignments = ", ".join(f"{key}=:{key}" for key in fields)
+    conn.execute(f"UPDATE preferred_plans SET {assignments} WHERE id=:id", {"id": plan_id, **fields})
+    conn.commit()
+
+
+def list_preferred_plans(conn: sqlite3.Connection, statuses: Iterable[str]) -> list[dict[str, Any]]:
+    vals = list(statuses)
+    if not vals:
+        return []
+    marks = ",".join("?" for _ in vals)
+    rows = conn.execute(
+        f"SELECT * FROM preferred_plans WHERE status IN ({marks}) ORDER BY updated_at",
+        vals,
+    ).fetchall()
+    plans: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["plan_json"] = json.loads(item.get("plan_json") or "{}")
+        except Exception:
+            item["plan_json"] = {}
+        plans.append(item)
+    return plans
 
 
 def list_tasks(conn: sqlite3.Connection, statuses: Iterable[str]) -> list[dict[str, Any]]:

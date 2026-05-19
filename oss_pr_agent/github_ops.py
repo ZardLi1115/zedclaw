@@ -297,6 +297,10 @@ def _read_cpa_config(path: str | None = None) -> dict[str, Any]:
     return data
 
 
+def _looks_like_bcrypt_hash(value: str) -> bool:
+    return value.startswith(("$2a$", "$2b$", "$2y$")) and len(value) >= 50
+
+
 def _load_codex_budget_auths(agent_cfg: dict[str, Any], cpa_cfg: dict[str, Any]) -> list[dict[str, Any]]:
     explicit_file = str(agent_cfg.get("cpa_codex_auth_file") or "").strip()
     auth_dir = Path(str(agent_cfg.get("cpa_auth_dir") or cpa_cfg.get("auth_dir") or "~/.cli-proxy-api")).expanduser()
@@ -339,6 +343,7 @@ def _load_codex_budget_auths(agent_cfg: dict[str, Any], cpa_cfg: dict[str, Any])
             "email": data.get("email"),
             "file": str(path),
             "priority": priority,
+            "access_token": str(data.get("access_token") or ""),
         }
         usable.append((priority, path, data, auth))
     if not usable:
@@ -462,9 +467,10 @@ def _query_cpa_wham_usage(base: str, key: str, auth: dict[str, Any]) -> dict[str
     import urllib.request
 
     headers = {
-        "Authorization": "Bearer $TOKEN$",
+        "Authorization": f"Bearer {auth['access_token']}" if auth.get("access_token") else "Bearer $TOKEN$",
         "Content-Type": "application/json",
-        "User-Agent": "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal",
+        "User-Agent": "codex_cli_rs/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9",
+        "Originator": "codex_cli_rs",
     }
     if auth.get("account_id"):
         headers["Chatgpt-Account-Id"] = auth["account_id"]
@@ -505,8 +511,22 @@ def _query_cpa_wham_usage(base: str, key: str, auth: dict[str, Any]) -> dict[str
                     "data": body_data,
                 }
             last_error = f"api-call returned {status_code}: {str(body)[:500]}"
+            if status_code in {401, 403}:
+                return {
+                    "status": "auth_error",
+                    "auth_email": auth.get("email"),
+                    "account_id": auth.get("account_id"),
+                    "error": last_error,
+                }
         except Exception as exc:
             last_error = str(exc)
+            if "HTTP Error 401" in last_error or "HTTP Error 403" in last_error:
+                return {
+                    "status": "auth_error",
+                    "auth_email": auth.get("email"),
+                    "account_id": auth.get("account_id"),
+                    "error": last_error,
+                }
     return {
         "status": "unknown",
         "auth_email": auth.get("email"),
@@ -534,6 +554,14 @@ def _cpa_budget_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
     if base and not base.endswith("/v0/management"):
         base = f"{base}/v0/management"
     key = str(agent_cfg.get("cpa_management_key") or cpa_cfg.get("management_key") or "").strip()
+    if _looks_like_bcrypt_hash(key) and not str(agent_cfg.get("cpa_management_key") or "").strip():
+        snapshot = {
+            "status": "unknown",
+            "source": "cpa_management",
+            "reason": "CPA management key in config is a bcrypt hash; set oss_pr_agent.cpa_management_key to the plaintext management key before querying budget.",
+        }
+        _save_budget_cache(snapshot)
+        return snapshot
     auths = _load_codex_budget_auths(agent_cfg, cpa_cfg)
     if not base or not key or not auths:
         snapshot = {
@@ -544,7 +572,12 @@ def _cpa_budget_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
         _save_budget_cache(snapshot)
         return snapshot
 
-    accounts = [_query_cpa_wham_usage(base, key, auth) for auth in auths]
+    accounts: list[dict[str, Any]] = []
+    for auth in auths:
+        account = _query_cpa_wham_usage(base, key, auth)
+        accounts.append(account)
+        if account.get("status") == "auth_error":
+            break
     ok_accounts = [account for account in accounts if account.get("status") == "ok"]
     if ok_accounts:
         snapshot = {
@@ -567,6 +600,96 @@ def _cpa_budget_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
     }
     _save_budget_cache(snapshot)
     return snapshot
+
+
+def _first_mapping(*values: Any) -> dict[str, Any]:
+    for value in values:
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _coerce_number(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip().replace(",", "")
+        if not text:
+            return None
+        try:
+            return float(text)
+        except Exception:
+            return None
+    return None
+
+
+def _normalize_usage_budget(data: dict[str, Any]) -> dict[str, Any]:
+    """Expose common OpenAI/Anthropic-compatible usage payloads as budget hints."""
+    nested_data = _first_mapping(data.get("data"))
+    direct_usage_keys = {
+        "total_tokens",
+        "totalTokens",
+        "prompt_tokens",
+        "completion_tokens",
+        "input_tokens",
+        "output_tokens",
+        "limit",
+        "remaining",
+        "remaining_tokens",
+        "remainingTokens",
+    }
+    usage = _first_mapping(data.get("usage"), nested_data.get("usage"))
+    if not usage and any(key in data for key in direct_usage_keys):
+        usage = data
+    limits = _first_mapping(data.get("limits"), data.get("quota"), data.get("rate_limit"), nested_data.get("limits"))
+    if not usage and not limits:
+        return {}
+
+    token_used = (
+        _coerce_number(usage.get("total_tokens"))
+        or _coerce_number(usage.get("totalTokens"))
+        or (
+            (_coerce_number(usage.get("prompt_tokens")) or _coerce_number(usage.get("input_tokens")) or 0.0)
+            + (_coerce_number(usage.get("completion_tokens")) or _coerce_number(usage.get("output_tokens")) or 0.0)
+        )
+    )
+    token_limit = (
+        _coerce_number(usage.get("token_limit"))
+        or _coerce_number(usage.get("tokenLimit"))
+        or _coerce_number(usage.get("limit"))
+        or _coerce_number(limits.get("token_limit"))
+        or _coerce_number(limits.get("tokenLimit"))
+        or _coerce_number(limits.get("limit"))
+    )
+    remaining = (
+        _coerce_number(usage.get("remaining"))
+        or _coerce_number(usage.get("remaining_tokens"))
+        or _coerce_number(usage.get("remainingTokens"))
+        or _coerce_number(limits.get("remaining"))
+        or _coerce_number(limits.get("remaining_tokens"))
+        or _coerce_number(limits.get("remainingTokens"))
+    )
+    if remaining is None and token_limit is not None and token_used is not None:
+        remaining = max(0.0, token_limit - token_used)
+    reset_at = (
+        usage.get("reset_at")
+        or usage.get("resetAt")
+        or limits.get("reset_at")
+        or limits.get("resetAt")
+        or data.get("reset_at")
+        or data.get("resetAt")
+    )
+    normalized = {
+        "usage": usage,
+        "limits": limits,
+        "token_used": token_used,
+        "token_limit": token_limit,
+        "remaining": remaining,
+        "reset_at": reset_at,
+    }
+    return {key: value for key, value in normalized.items() if value not in (None, {}, "")}
 
 
 def budget_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -599,7 +722,12 @@ def budget_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
         with urllib.request.urlopen(req, timeout=8) as resp:
             raw = resp.read(20000).decode("utf-8", errors="replace")
         try:
-            return {"status": "ok", "data": json.loads(raw)}
+            data = json.loads(raw)
+            normalized = _normalize_usage_budget(data) if isinstance(data, dict) else {}
+            snapshot = {"status": "ok", "source": "usage_endpoint", "data": data}
+            if normalized:
+                snapshot["normalized_usage"] = normalized
+            return snapshot
         except Exception:
             return {"status": "ok", "raw": raw[:2000]}
     except Exception as exc:

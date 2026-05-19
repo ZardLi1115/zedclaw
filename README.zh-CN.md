@@ -136,6 +136,7 @@ OSS PR Agent 相关重要配置包括：
 | `oss_pr_agent.notify_target` | 通知目标，常用 `feishu`。 |
 | `oss_pr_agent.min_repo_stars` | 候选仓库最低 star 数。 |
 | `oss_pr_agent.repo_activity_window_days` | 候选仓库允许的最长未活跃时间。 |
+| `oss_pr_agent.budget_url` | 可选的 OpenAI/Anthropic 兼容用量端点；返回的 `usage`、`limits`、`remaining` 字段会作为预算信号。 |
 
 优先使用配置向导：
 

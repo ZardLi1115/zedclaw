@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from zedclaw_cli.config import load_config
 
-from . import codex_executor, daily_review, email_intake, github_ops, llm, notifier, state
+from . import codex_executor, daily_review, email_intake, github_ops, llm, notifier, prefer, state
 
 logger = logging.getLogger(__name__)
 
@@ -540,7 +540,11 @@ def _run_new_task(conn, cfg: dict[str, Any], candidate: dict[str, Any]) -> None:
         "max_fix_attempts": max_fix,
         "score": candidate.get("score", 0),
     }
+    if candidate.get("preferred_plan"):
+        task["preferred_plan"] = candidate.get("preferred_plan")
     state.upsert_task(conn, task)
+    if candidate.get("preferred_plan_id"):
+        state.update_preferred_plan(conn, str(candidate["preferred_plan_id"]), status="running")
     notifier.notify_task_started(cfg, task)
     github_ops.clone_or_update(candidate["repo"], workspace)
     result = codex_executor.run_codex(
@@ -553,11 +557,15 @@ def _run_new_task(conn, cfg: dict[str, Any], candidate: dict[str, Any]) -> None:
     pr_number = github_ops.parse_pr_number(pr_url)
     if result["status"] == "succeeded" and pr_url:
         state.update_task(conn, task_id, status="WAITING_CI", pr_url=pr_url, pr_number=pr_number)
+        if candidate.get("preferred_plan_id"):
+            state.update_preferred_plan(conn, str(candidate["preferred_plan_id"]), status="submitted")
         task["pr_url"] = pr_url
         task["pr_number"] = pr_number
         notifier.notify_pr_submitted(cfg, task)
     elif result["status"] == "succeeded":
         state.update_task(conn, task_id, status="FAILED_NEEDS_HUMAN", failure_reason="Codex finished but no PR URL was detected")
+        if candidate.get("preferred_plan_id"):
+            state.update_preferred_plan(conn, str(candidate["preferred_plan_id"]), status="failed")
         state.add_human_review_item(
             conn,
             source="runtime",
@@ -571,6 +579,8 @@ def _run_new_task(conn, cfg: dict[str, Any], candidate: dict[str, Any]) -> None:
         notifier.notify_failed_human(cfg, task, "Codex finished but no PR URL was detected.")
     else:
         state.update_task(conn, task_id, status="FAILED_NEEDS_HUMAN", failure_reason=result.get("output"))
+        if candidate.get("preferred_plan_id"):
+            state.update_preferred_plan(conn, str(candidate["preferred_plan_id"]), status="failed")
         state.add_human_review_item(
             conn,
             source="runtime",
@@ -657,6 +667,13 @@ def tick_once() -> dict[str, Any]:
 
             waiting_prs = state.list_tasks(conn, ["WAITING_CI", "PR_READY"])
             max_active_prs = int(_agent_cfg(cfg).get("max_active_prs", 999) or 999)
+            active_slots_available = len(waiting_prs) < max_active_prs
+
+            preferred_candidate = prefer.next_approved_candidate(conn)
+            if preferred_candidate and active_slots_available:
+                _run_new_task(conn, cfg, preferred_candidate)
+                _set_next_wake(conn, cfg, 20 * 60, "check newly opened preferred PR")
+                return {"status": "preferred_task_started", "candidate": preferred_candidate}
 
             budget = github_ops.budget_snapshot(cfg)
             budget_state = _budget_state(budget)
@@ -687,7 +704,6 @@ def tick_once() -> dict[str, Any]:
             decision = _planner_decision(cfg, context)
             delay_minutes = float(decision.get("next_wake_delay_minutes") or (45 if candidates else 120))
             action = str(decision.get("action") or ("start_task" if candidates else "sleep")).strip().lower()
-            active_slots_available = len(waiting_prs) < max_active_prs
             if budget_state == "exhausted":
                 _set_next_wake(conn, cfg, delay_minutes * 60, decision.get("reason") or "budget exhausted")
                 return {"status": "planned_sleep", "decision": decision, "budget_state": budget_state, "candidates": len(candidates)}

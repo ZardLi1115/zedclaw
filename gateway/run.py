@@ -6218,6 +6218,8 @@ class GatewayRunner:
                     return await self._handle_language_command(event)
                 if _cmd_def_inner.name == "method":
                     return await self._handle_method_command(event)
+                if _cmd_def_inner.name == "prefer":
+                    return await self._handle_prefer_command(event)
                 if _cmd_def_inner.name == "update":
                     return await self._handle_update_command(event)
 
@@ -6472,6 +6474,9 @@ class GatewayRunner:
 
         if canonical == "method":
             return await self._handle_method_command(event)
+
+        if canonical == "prefer":
+            return await self._handle_prefer_command(event)
 
         if canonical == "agents":
             return await self._handle_agents_command(event)
@@ -8641,6 +8646,33 @@ class GatewayRunner:
         except Exception as exc:
             logger.warning("oss_pr_agent method command failed: %s", exc, exc_info=True)
             return f"OSS PR Agent method setting failed: {exc}"
+
+    async def _handle_prefer_command(self, event: MessageEvent) -> str:
+        """Handle one-shot preferred repository analysis for OSS PR Agent."""
+        try:
+            from oss_pr_agent import prefer
+            from oss_pr_agent.status import get_language
+
+            arg = event.get_command_args().strip()
+            lang = await asyncio.to_thread(get_language)
+            if not arg:
+                if lang == "zh":
+                    return "用法：`/prefer https://github.com/owner/repo`，或 `/prefer approve <计划ID>`。"
+                return "Usage: `/prefer https://github.com/owner/repo`, or `/prefer approve <plan-id>`."
+
+            parts = arg.split(maxsplit=1)
+            action = parts[0].lower()
+            rest = parts[1].strip() if len(parts) > 1 else ""
+            if action == "approve":
+                return await asyncio.to_thread(prefer.approve, rest)
+            if action == "reject":
+                return await asyncio.to_thread(prefer.reject, rest)
+            if action in {"list", "ls"}:
+                return await asyncio.to_thread(prefer.list_pending)
+            return await asyncio.to_thread(prefer.analyze_once, arg)
+        except Exception as exc:
+            logger.warning("oss_pr_agent prefer command failed: %s", exc, exc_info=True)
+            return f"OSS PR Agent preferred repo command failed: {exc}"
 
     async def _handle_agents_command(self, event: MessageEvent) -> str:
         """Handle /agents command - list active agents and running tasks."""

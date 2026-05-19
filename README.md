@@ -136,6 +136,7 @@ Important OSS PR Agent settings include:
 | `oss_pr_agent.notify_target` | Notification target, commonly `feishu`. |
 | `oss_pr_agent.min_repo_stars` | Minimum repository stars for candidate repositories. |
 | `oss_pr_agent.repo_activity_window_days` | Maximum allowed inactivity window for candidate repositories. |
+| `oss_pr_agent.budget_url` | Optional OpenAI/Anthropic-compatible usage endpoint; `usage`, `limits`, and `remaining` fields are treated as budget signals. |
 
 Use the setup wizard when possible:
 
