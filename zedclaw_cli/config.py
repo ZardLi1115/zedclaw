@@ -1433,6 +1433,9 @@ DEFAULT_CONFIG = {
         "cpa_codex_auth_file": "",
         "cpa_codex_auth_index": "",
         "cpa_codex_account_id": "",
+        "cpa_budget_cache_success_seconds": 600,
+        "cpa_budget_cache_failure_seconds": 1800,
+        "cpa_budget_min_query_seconds": 600,
         "repository_queries": [
             "agent label:\"good first issue\" language:Python",
             "LLM eval harness label:bug",

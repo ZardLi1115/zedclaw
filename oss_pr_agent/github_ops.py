@@ -5,11 +5,18 @@ import logging
 import os
 import re
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from zedclaw_constants import get_zedclaw_home
+
 logger = logging.getLogger(__name__)
+
+CPA_BUDGET_CACHE_SUCCESS_SECONDS = 600
+CPA_BUDGET_CACHE_FAILURE_SECONDS = 1800
+CPA_BUDGET_MIN_QUERY_SECONDS = 600
 
 
 def run(cmd: list[str], *, cwd: str | Path | None = None, timeout: int = 120) -> subprocess.CompletedProcess:
@@ -320,10 +327,14 @@ def _load_codex_budget_auths(agent_cfg: dict[str, Any], cpa_cfg: dict[str, Any])
             priority = 20
         elif "free" in plan_hint:
             priority = 5
-        auth_index = str(explicit_index or data.get("auth_index") or data.get("authIndex") or path.name)
+        configured_auth_index = explicit_index or data.get("auth_index") or data.get("authIndex")
+        auth_index = str(configured_auth_index or path.name)
+        fallbacks = [auth_index]
+        if configured_auth_index:
+            fallbacks.extend([path.name, path.stem])
         auth = {
             "auth_index": auth_index,
-            "auth_index_fallbacks": [auth_index, path.name, path.stem],
+            "auth_index_fallbacks": fallbacks,
             "account_id": str(explicit_account or data.get("account_id") or ""),
             "email": data.get("email"),
             "file": str(path),
@@ -387,6 +398,66 @@ def _window_remaining_sum(accounts: list[dict[str, Any]]) -> dict[str, float]:
     return totals
 
 
+def _budget_cache_path() -> Path:
+    return get_zedclaw_home() / "oss_pr_agent" / "budget_cache.json"
+
+
+def _budget_cache_ttls(agent_cfg: dict[str, Any]) -> tuple[float, float, float]:
+    def read_seconds(key: str, default: int) -> float:
+        try:
+            return max(0.0, float(agent_cfg.get(key, default) or default))
+        except Exception:
+            return float(default)
+
+    return (
+        read_seconds("cpa_budget_cache_success_seconds", CPA_BUDGET_CACHE_SUCCESS_SECONDS),
+        read_seconds("cpa_budget_cache_failure_seconds", CPA_BUDGET_CACHE_FAILURE_SECONDS),
+        read_seconds("cpa_budget_min_query_seconds", CPA_BUDGET_MIN_QUERY_SECONDS),
+    )
+
+
+def _load_budget_cache(agent_cfg: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        data = json.loads(_budget_cache_path().read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    snapshot = data.get("snapshot")
+    if not isinstance(snapshot, dict):
+        return None
+    try:
+        fetched_at = float(data.get("fetched_at") or 0)
+    except Exception:
+        return None
+    age = time.time() - fetched_at
+    if age < 0:
+        return None
+    success_ttl, failure_ttl, min_interval = _budget_cache_ttls(agent_cfg)
+    status = str(snapshot.get("status") or "").lower()
+    ttl = success_ttl if status == "ok" else failure_ttl
+    if age <= ttl or age <= min_interval:
+        cached = dict(snapshot)
+        cached["cached"] = True
+        cached["cache_age_seconds"] = int(age)
+        return cached
+    return None
+
+
+def _save_budget_cache(snapshot: dict[str, Any]) -> None:
+    try:
+        path = _budget_cache_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(
+            json.dumps({"fetched_at": time.time(), "snapshot": snapshot}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        tmp.replace(path)
+    except Exception as exc:
+        logger.debug("failed to write CPA budget cache: %s", exc)
+
+
 def _query_cpa_wham_usage(base: str, key: str, auth: dict[str, Any]) -> dict[str, Any]:
     import urllib.request
 
@@ -446,6 +517,9 @@ def _query_cpa_wham_usage(base: str, key: str, auth: dict[str, Any]) -> dict[str
 
 def _cpa_budget_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
     agent_cfg = cfg.get("oss_pr_agent", {}) if isinstance(cfg, dict) else {}
+    cached = _load_budget_cache(agent_cfg)
+    if cached is not None:
+        return cached
     cpa_cfg = _read_cpa_config(str(agent_cfg.get("cpa_config_path") or "").strip() or None)
     base = str(
         agent_cfg.get("cpa_management_base_url")
@@ -462,16 +536,18 @@ def _cpa_budget_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
     key = str(agent_cfg.get("cpa_management_key") or cpa_cfg.get("management_key") or "").strip()
     auths = _load_codex_budget_auths(agent_cfg, cpa_cfg)
     if not base or not key or not auths:
-        return {
+        snapshot = {
             "status": "unknown",
             "source": "cpa_management",
             "reason": "missing CPA management base/key or Codex auth file",
         }
+        _save_budget_cache(snapshot)
+        return snapshot
 
     accounts = [_query_cpa_wham_usage(base, key, auth) for auth in auths]
     ok_accounts = [account for account in accounts if account.get("status") == "ok"]
     if ok_accounts:
-        return {
+        snapshot = {
             "status": "ok",
             "source": "cpa_wham_usage_pool",
             "account_count": len(accounts),
@@ -480,13 +556,17 @@ def _cpa_budget_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
             "accounts": ok_accounts,
             "failed_accounts": [account for account in accounts if account.get("status") != "ok"],
         }
-    return {
+        _save_budget_cache(snapshot)
+        return snapshot
+    snapshot = {
         "status": "unknown",
         "source": "cpa_wham_usage_pool",
         "account_count": len(accounts),
         "accounts": accounts,
         "error": "; ".join(str(account.get("error") or "") for account in accounts if account.get("error"))[:1000],
     }
+    _save_budget_cache(snapshot)
+    return snapshot
 
 
 def budget_snapshot(cfg: dict[str, Any]) -> dict[str, Any]:
