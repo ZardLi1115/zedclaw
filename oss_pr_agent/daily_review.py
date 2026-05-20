@@ -22,6 +22,14 @@ def _agent_md_path() -> Path:
     return state.agent_home() / "agent.md"
 
 
+def _planner_md_path() -> Path:
+    return state.agent_home() / "planner.md"
+
+
+def _codex_md_path() -> Path:
+    return state.agent_home() / "codex.md"
+
+
 def _agent_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
     return cfg.get("oss_pr_agent", {}) if isinstance(cfg, dict) else {}
 
@@ -53,11 +61,29 @@ def _sleep_start_datetime(cfg: dict[str, Any], now: datetime) -> datetime:
     return datetime.combine(now.date(), sleep_start, tzinfo=now.tzinfo)
 
 
-def read_agent_memory() -> str:
-    path = _agent_md_path()
+def _read_memory_path(path: Path, *, fallback: Path | None = None, max_chars: int = 6000) -> str:
+    if not path.exists() and fallback is not None:
+        path = fallback
     if not path.exists():
         return ""
-    return path.read_text(encoding="utf-8", errors="replace").strip()
+    text = path.read_text(encoding="utf-8", errors="replace").strip()
+    if max_chars > 0 and len(text) > max_chars:
+        return text[-max_chars:].strip()
+    return text
+
+
+def read_agent_memory() -> str:
+    return _read_memory_path(_agent_md_path(), max_chars=6000)
+
+
+def read_planner_memory(cfg: dict[str, Any] | None = None) -> str:
+    max_chars = int(_agent_cfg(cfg or {}).get("planner_memory_max_chars", 5000) or 5000)
+    return _read_memory_path(_planner_md_path(), fallback=_agent_md_path(), max_chars=max_chars)
+
+
+def read_codex_memory(cfg: dict[str, Any] | None = None) -> str:
+    max_chars = int(_agent_cfg(cfg or {}).get("codex_memory_max_chars", 5000) or 5000)
+    return _read_memory_path(_codex_md_path(), fallback=_agent_md_path(), max_chars=max_chars)
 
 
 def _day_bounds(now: datetime) -> tuple[float, float, str]:
@@ -213,6 +239,35 @@ def summarize_lessons(cfg: dict[str, Any], diary: str) -> str:
     return "- LLM 总结暂时失败；保留日记供人工复盘。\n"
 
 
+def summarize_role_lessons(cfg: dict[str, Any], diary: str, *, role: str) -> str:
+    agent_cfg = cfg.get("oss_pr_agent", {}) if isinstance(cfg, dict) else {}
+    model = str(agent_cfg.get("daily_review_model") or agent_cfg.get("planner_model") or "gpt-5.5")
+    if role == "planner":
+        focus = "只总结寻找 PR、仓库筛选、issue 选择、排期、冷静期、预算使用方面的经验。不要写实现细节。"
+    else:
+        focus = "只总结 Codex 执行 PR、修 PR、测试、CI、提交说明、避免扩大 diff 方面的经验。不要写选题策略。"
+    text = llm.call_text(
+        model=model,
+        system=(
+            "你是 OSS PR Agent 的每日经验分流器。只根据今天的日记，总结可复用经验。"
+            f"{focus} 输出中文 Markdown，简洁、凝练、可执行，不要复述流水账。"
+        ),
+        user=diary,
+        max_tokens=700,
+        temperature=0.2,
+    )
+    if text:
+        return text.strip() + "\n"
+    return "- LLM 总结暂时失败；保留日记供人工复盘。\n"
+
+
+def _append_daily_section(path: Path, *, heading: str, day: str, body: str) -> None:
+    existing = path.read_text(encoding="utf-8") if path.exists() else f"# {heading}\n"
+    section = f"## {day}\n\n{body.strip()}\n"
+    if f"## {day}" not in existing:
+        path.write_text(existing.rstrip() + "\n\n" + section, encoding="utf-8")
+
+
 def run_daily_review(conn, cfg: dict[str, Any], now_ts: float | None = None) -> dict[str, str]:
     now = datetime.fromtimestamp(now_ts or time.time(), tz=_agent_timezone(cfg))
     day = now.date().isoformat()
@@ -222,19 +277,23 @@ def run_daily_review(conn, cfg: dict[str, Any], now_ts: float | None = None) -> 
     diary_path = _diary_dir() / f"{day}.md"
     diary_path.write_text(diary, encoding="utf-8")
 
-    agent_path = _agent_md_path()
-    existing = agent_path.read_text(encoding="utf-8") if agent_path.exists() else "# OSS PR Agent 经验记录\n"
-    section = f"## {day}\n\n{lessons.strip()}\n"
-    if f"## {day}" not in existing:
-        agent_path.write_text(existing.rstrip() + "\n\n" + section, encoding="utf-8")
+    planner_lessons = summarize_role_lessons(cfg, diary, role="planner")
+    codex_lessons = summarize_role_lessons(cfg, diary, role="codex")
+    _append_daily_section(_agent_md_path(), heading="OSS PR Agent 经验记录", day=day, body=lessons)
+    _append_daily_section(_planner_md_path(), heading="OSS PR Agent Planner 经验", day=day, body=planner_lessons)
+    _append_daily_section(_codex_md_path(), heading="OSS PR Agent Codex 经验", day=day, body=codex_lessons)
 
     state.set_meta(conn, "daily_review_last_date", day)
     return {
         "day": day,
         "diary": diary,
-        "lessons": section,
+        "lessons": f"## {day}\n\n{lessons.strip()}\n",
+        "planner_lessons": f"## {day}\n\n{planner_lessons.strip()}\n",
+        "codex_lessons": f"## {day}\n\n{codex_lessons.strip()}\n",
         "diary_path": str(diary_path),
-        "agent_path": str(agent_path),
+        "agent_path": str(_agent_md_path()),
+        "planner_path": str(_planner_md_path()),
+        "codex_path": str(_codex_md_path()),
     }
 
 
@@ -242,6 +301,8 @@ def run_sleepwalking(conn, cfg: dict[str, Any], now_ts: float | None = None) -> 
     now = datetime.fromtimestamp(now_ts or time.time(), tz=_agent_timezone(cfg))
     day = now.date().isoformat()
     existing = read_agent_memory()
+    planner_existing = read_planner_memory(cfg)
+    codex_existing = read_codex_memory(cfg)
     diary_path = _diary_dir() / f"{day}.md"
     diary = diary_path.read_text(encoding="utf-8", errors="replace") if diary_path.exists() else ""
     agent_cfg = _agent_cfg(cfg)
@@ -274,11 +335,41 @@ def run_sleepwalking(conn, cfg: dict[str, Any], now_ts: float | None = None) -> 
         summary = "# OSS PR Agent 经验记录\n\n" + summary
     agent_path = _agent_md_path()
     agent_path.write_text(summary.rstrip() + "\n", encoding="utf-8")
+    planner_summary = llm.call_text(
+        model=model,
+        system=(
+            "你是 OSS PR Agent 的 planner 经验整理器。将旧 planner 经验和今天日记压缩为长期规则。"
+            "只保留选题、仓库筛选、PR 大小判断、预算/排期、冷静期和维护者关系方面的规则。"
+            "不要写 Codex 具体执行细节。中文 Markdown，短而可执行。"
+        ),
+        user=f"# 旧 planner 经验\n\n{planner_existing or '无'}\n\n# 今天新日记\n\n{diary or '无'}\n",
+        max_tokens=int(agent_cfg.get("planner_sleepwalking_max_tokens") or 1200),
+        temperature=0.2,
+    ) or planner_existing or "# OSS PR Agent Planner 经验\n\n- 暂无可压缩经验。\n"
+    codex_summary = llm.call_text(
+        model=model,
+        system=(
+            "你是 OSS PR Agent 的 Codex 执行经验整理器。将旧 Codex 经验和今天日记压缩为长期规则。"
+            "只保留实现、测试、CI、修 PR、提交说明、控制 diff 范围方面的规则。"
+            "不要写选题和排期策略。中文 Markdown，短而可执行。"
+        ),
+        user=f"# 旧 Codex 经验\n\n{codex_existing or '无'}\n\n# 今天新日记\n\n{diary or '无'}\n",
+        max_tokens=int(agent_cfg.get("codex_sleepwalking_max_tokens") or 1200),
+        temperature=0.2,
+    ) or codex_existing or "# OSS PR Agent Codex 经验\n\n- 暂无可压缩经验。\n"
+    if not planner_summary.strip().startswith("#"):
+        planner_summary = "# OSS PR Agent Planner 经验\n\n" + planner_summary.strip()
+    if not codex_summary.strip().startswith("#"):
+        codex_summary = "# OSS PR Agent Codex 经验\n\n" + codex_summary.strip()
+    _planner_md_path().write_text(planner_summary.rstrip() + "\n", encoding="utf-8")
+    _codex_md_path().write_text(codex_summary.rstrip() + "\n", encoding="utf-8")
     state.set_meta(conn, "sleepwalking_last_date", day)
     return {
         "day": day,
         "summary": summary.rstrip() + "\n",
         "agent_path": str(agent_path),
+        "planner_path": str(_planner_md_path()),
+        "codex_path": str(_codex_md_path()),
     }
 
 

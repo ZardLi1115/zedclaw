@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 from zedclaw_cli.config import load_config, save_config
 
-from . import github_ops, state
+from . import github_ops, state, tool_registry
 
 
 ACTIVE_STATUSES = ("RUNNING_CODEX", "OPENING_PR", "WAITING_CI", "NEEDS_FIX", "FIXING_PR")
@@ -304,6 +304,71 @@ def render_human_review() -> str:
                 f"   Subject: {item.get('subject') or '(none)'}",
                 f"   Reason: {item.get('reason') or '(none)'}",
                 f"   Summary: {(item.get('summary') or '(none)')[:700]}",
+            ]
+        )
+    return "\n".join(lines)
+
+
+def render_tools() -> str:
+    lang = get_language()
+    cfg = load_config()
+    agent_cfg = cfg.get("oss_pr_agent", {}) if isinstance(cfg, dict) else {}
+    enabled = bool(agent_cfg.get("reusable_tools_enabled", True))
+    try:
+        max_tools = max(0, int(agent_cfg.get("max_reusable_tools", 15) or 15))
+    except Exception:
+        max_tools = 15
+    tools = tool_registry.enforce_lru(cfg) if enabled else []
+    base = tool_registry.tools_dir()
+    registry = tool_registry.registry_path()
+
+    if lang == "zh":
+        lines = [
+            "OSS PR Agent 可复用工具",
+            f"状态：{'已启用' if enabled else '已关闭'}",
+            f"工具目录：{base}",
+            f"注册表：{registry}",
+            f"当前工具数：{len(tools)}/{max_tools}",
+        ]
+        if not enabled:
+            lines.append("可复用工具功能已关闭。")
+            return "\n".join(lines)
+        if not tools:
+            lines.append("当前没有已注册工具。")
+            return "\n".join(lines)
+        for index, item in enumerate(tools, start=1):
+            lines.extend(
+                [
+                    "",
+                    f"{index}. {item.get('name')}",
+                    f"   描述：{item.get('description')}",
+                    f"   路径：{base / str(item.get('path') or '')}",
+                    f"   最后使用：{_age(item.get('last_used_at'))}",
+                ]
+            )
+        return "\n".join(lines)
+
+    lines = [
+        "OSS PR Agent reusable tools",
+        f"Status: {'enabled' if enabled else 'disabled'}",
+        f"Tool directory: {base}",
+        f"Registry: {registry}",
+        f"Tools: {len(tools)}/{max_tools}",
+    ]
+    if not enabled:
+        lines.append("Reusable tools are disabled.")
+        return "\n".join(lines)
+    if not tools:
+        lines.append("No registered tools yet.")
+        return "\n".join(lines)
+    for index, item in enumerate(tools, start=1):
+        lines.extend(
+            [
+                "",
+                f"{index}. {item.get('name')}",
+                f"   Description: {item.get('description')}",
+                f"   Path: {base / str(item.get('path') or '')}",
+                f"   Last used: {_age(item.get('last_used_at'))}",
             ]
         )
     return "\n".join(lines)

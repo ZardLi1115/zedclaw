@@ -118,6 +118,14 @@ def init_db(conn: sqlite3.Connection) -> None:
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS repo_cooldowns (
+            repo TEXT PRIMARY KEY,
+            reason TEXT NOT NULL,
+            task_id TEXT,
+            pr_url TEXT,
+            started_at REAL NOT NULL,
+            until_at REAL NOT NULL
+        );
         """
     )
     conn.commit()
@@ -262,6 +270,54 @@ def list_preferred_plans(conn: sqlite3.Connection, statuses: Iterable[str]) -> l
     return plans
 
 
+def add_repo_cooldown(
+    conn: sqlite3.Connection,
+    *,
+    repo: str,
+    reason: str,
+    until_at: float,
+    task_id: str = "",
+    pr_url: str = "",
+) -> None:
+    repo = str(repo or "").strip()
+    if not repo:
+        return
+    conn.execute(
+        """
+        INSERT INTO repo_cooldowns(repo, reason, task_id, pr_url, started_at, until_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(repo) DO UPDATE SET
+            reason=excluded.reason,
+            task_id=excluded.task_id,
+            pr_url=excluded.pr_url,
+            started_at=excluded.started_at,
+            until_at=MAX(repo_cooldowns.until_at, excluded.until_at)
+        """,
+        (repo, reason, task_id, pr_url, time.time(), float(until_at)),
+    )
+    conn.commit()
+
+
+def repo_cooldown(conn: sqlite3.Connection, repo: str, *, now: float | None = None) -> dict[str, Any] | None:
+    repo = str(repo or "").strip()
+    if not repo:
+        return None
+    now_ts = time.time() if now is None else float(now)
+    row = conn.execute("SELECT * FROM repo_cooldowns WHERE repo=?", (repo,)).fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    if float(item.get("until_at") or 0) <= now_ts:
+        conn.execute("DELETE FROM repo_cooldowns WHERE repo=?", (repo,))
+        conn.commit()
+        return None
+    return item
+
+
+def repo_in_cooldown(conn: sqlite3.Connection, repo: str, *, now: float | None = None) -> bool:
+    return repo_cooldown(conn, repo, now=now) is not None
+
+
 def list_tasks(conn: sqlite3.Connection, statuses: Iterable[str]) -> list[dict[str, Any]]:
     vals = list(statuses)
     if not vals:
@@ -388,6 +444,14 @@ def mark_merged(conn: sqlite3.Connection, *, repo: str, pr_number: int, pr_url: 
         (repo, int(pr_number), pr_url, merged_at, task_id, source_email_id, summary, time.time()),
     )
     conn.commit()
+
+
+def merged_pr_count(conn: sqlite3.Connection, repo: str) -> int:
+    row = conn.execute(
+        "SELECT count(*) AS c FROM successful_merged_pr WHERE repo=?",
+        (str(repo or "").strip(),),
+    ).fetchone()
+    return int(row["c"] if row else 0)
 
 
 def write_human_review_markdown(conn: sqlite3.Connection) -> Path:

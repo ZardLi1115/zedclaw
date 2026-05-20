@@ -108,6 +108,47 @@ def _set_next_wake(conn, cfg: dict[str, Any], delay_seconds: float, reason: str)
     state.set_meta(conn, "next_wake_reason", reason)
 
 
+def _maybe_cooldown_repo_after_close(conn, cfg: dict[str, Any], task: dict[str, Any], reason: str) -> dict[str, Any] | None:
+    agent_cfg = _agent_cfg(cfg)
+    if not agent_cfg.get("repo_close_cooldown_enabled", True):
+        return None
+    try:
+        cooldown_seconds = float(agent_cfg.get("repo_close_cooldown_days", 7) or 7) * 86400
+    except Exception:
+        return None
+    now = time.time()
+    until_at = now + max(0.0, cooldown_seconds)
+    state.add_repo_cooldown(
+        conn,
+        repo=str(task.get("repo") or ""),
+        reason=reason,
+        until_at=until_at,
+        task_id=str(task.get("id") or ""),
+        pr_url=str(task.get("pr_url") or ""),
+    )
+    return {"repo": task.get("repo"), "until_at": until_at, "reason": reason}
+
+
+def _annotate_repo_trust(conn, cfg: dict[str, Any], candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    threshold = int(_agent_cfg(cfg).get("small_pr_until_merged_count", 3) or 3)
+    annotated: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+    for candidate in candidates:
+        repo = str(candidate.get("repo") or "")
+        if repo not in counts:
+            counts[repo] = state.merged_pr_count(conn, repo)
+        item = dict(candidate)
+        item["repo_merged_pr_count"] = counts[repo]
+        item["small_pr_preferred"] = counts[repo] < threshold
+        item["small_pr_reason"] = (
+            f"Only {counts[repo]} merged PR(s) are tracked for this repo; prefer a small, low-risk PR."
+            if item["small_pr_preferred"]
+            else ""
+        )
+        annotated.append(item)
+    return annotated
+
+
 def _budget_aggression(budget: dict[str, Any]) -> tuple[str, float]:
     state_text = _budget_state(budget)
     if state_text == "exhausted":
@@ -167,7 +208,7 @@ def _planner_decision(cfg: dict[str, Any], context: dict[str, Any]) -> dict[str,
             "existing PR fixes before new tasks. Treat unknown or 404 budget telemetry "
             "as unknown, not exhausted; when active PR slots are available and candidates "
             "exist, prefer starting another task unless a PR needs fixing now. Apply the "
-            "agent_experience_md field as long-term operating guidance."
+            "planner_experience_md field as long-term operating guidance."
         ),
         user=json.dumps(context, ensure_ascii=False),
         max_tokens=700,
@@ -440,6 +481,7 @@ def _monitor_active_prs(conn, cfg: dict[str, Any]) -> list[dict[str, Any]]:
         elif str(status.get("state") or "").upper() == "CLOSED":
             old_status = task.get("status")
             reason = "PR was closed without merge."
+            cooldown = _maybe_cooldown_repo_after_close(conn, cfg, task, reason)
             state.update_task(conn, task["id"], status="CLOSED_UNMERGED", failure_reason=reason)
             task["status"] = "CLOSED_UNMERGED"
             state.add_human_review_item(
@@ -454,7 +496,7 @@ def _monitor_active_prs(conn, cfg: dict[str, Any]) -> list[dict[str, Any]]:
             )
             notifier.notify_failed_human(cfg, task, reason)
             notifier.notify_status_changed(cfg, task, old_status, "CLOSED_UNMERGED", reason)
-            updates.append({"task": task["id"], "status": "CLOSED_UNMERGED"})
+            updates.append({"task": task["id"], "status": "CLOSED_UNMERGED", "cooldown": cooldown})
         elif github_ops.checks_failed(status):
             if int(task.get("fix_attempts") or 0) >= int(task.get("max_fix_attempts") or 5):
                 old_status = task.get("status")
@@ -539,6 +581,9 @@ def _run_new_task(conn, cfg: dict[str, Any], candidate: dict[str, Any]) -> None:
         "fix_attempts": 0,
         "max_fix_attempts": max_fix,
         "score": candidate.get("score", 0),
+        "repo_merged_pr_count": candidate.get("repo_merged_pr_count"),
+        "small_pr_preferred": candidate.get("small_pr_preferred"),
+        "small_pr_reason": candidate.get("small_pr_reason"),
     }
     if candidate.get("preferred_plan"):
         task["preferred_plan"] = candidate.get("preferred_plan")
@@ -671,6 +716,7 @@ def tick_once() -> dict[str, Any]:
 
             preferred_candidate = prefer.next_approved_candidate(conn)
             if preferred_candidate and active_slots_available:
+                preferred_candidate = _annotate_repo_trust(conn, cfg, [preferred_candidate])[0]
                 _run_new_task(conn, cfg, preferred_candidate)
                 _set_next_wake(conn, cfg, 20 * 60, "check newly opened preferred PR")
                 return {"status": "preferred_task_started", "candidate": preferred_candidate}
@@ -686,7 +732,9 @@ def tick_once() -> dict[str, Any]:
             candidates = [
                 candidate for candidate in candidates
                 if (candidate.get("repo"), int(candidate.get("issue_number") or 0)) not in active_keys
+                and not state.repo_in_cooldown(conn, str(candidate.get("repo") or ""))
             ]
+            candidates = _annotate_repo_trust(conn, cfg, candidates)
             context = {
                 "time": _now_iso(),
                 "budget": budget,
@@ -699,7 +747,7 @@ def tick_once() -> dict[str, Any]:
                 "active_prs": waiting_prs[:5],
                 "max_active_prs": max_active_prs,
                 "candidates": candidates[:8],
-                "agent_experience_md": daily_review.read_agent_memory(),
+                "planner_experience_md": daily_review.read_planner_memory(cfg),
             }
             decision = _planner_decision(cfg, context)
             delay_minutes = float(decision.get("next_wake_delay_minutes") or (45 if candidates else 120))

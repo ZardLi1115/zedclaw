@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from . import state
+from . import daily_review, state, tool_registry
 
 
 def _run_dir(task_id: str) -> Path:
@@ -16,19 +16,18 @@ def _run_dir(task_id: str) -> Path:
     return path
 
 
-def _with_agent_experience(prompt: str) -> str:
-    path = state.agent_home() / "agent.md"
-    if not path.exists():
+def _with_agent_experience(prompt: str, cfg: dict[str, Any]) -> str:
+    memory = daily_review.read_codex_memory(cfg)
+    tools = tool_registry.render_prompt_section(cfg)
+    if not memory and not tools:
         return prompt
-    memory = path.read_text(encoding="utf-8", errors="replace").strip()
-    if not memory:
-        return prompt
-    return (
-        "# OSS PR Agent Long-Term Experience\n\n"
-        f"{memory}\n\n"
-        "# Current Task Instructions\n\n"
-        f"{prompt}"
-    )
+    sections = []
+    if memory:
+        sections.append("# OSS PR Agent Codex Execution Experience\n\n" + memory)
+    if tools:
+        sections.append(tools)
+    sections.append("# Current Task Instructions\n\n" + prompt)
+    return "\n\n".join(sections)
 
 
 def run_codex(*, task: dict[str, Any], cfg: dict[str, Any], prompt: str, kind: str) -> dict[str, Any]:
@@ -42,7 +41,7 @@ def run_codex(*, task: dict[str, Any], cfg: dict[str, Any], prompt: str, kind: s
     prompt_path = run_dir / "prompt.md"
     result_path = run_dir / "result.md"
     log_path = run_dir / "codex.log"
-    prompt = _with_agent_experience(prompt)
+    prompt = _with_agent_experience(prompt, cfg)
     prompt_path.write_text(prompt, encoding="utf-8")
     cmd = [
         codex_bin,
@@ -73,6 +72,7 @@ def run_codex(*, task: dict[str, Any], cfg: dict[str, Any], prompt: str, kind: s
         timeout=timeout,
         env=env,
     )
+    tool_registry.enforce_lru(cfg)
     log_path.write_text(proc.stdout or "", encoding="utf-8")
     return {
         "status": "succeeded" if proc.returncode == 0 else "failed",
@@ -95,6 +95,13 @@ def initial_prompt(task: dict[str, Any]) -> str:
 User-approved preferred plan:
 {preferred_plan}
 """
+    small_pr_context = ""
+    if task.get("small_pr_preferred"):
+        small_pr_context = f"""
+Repo trust note:
+{task.get('small_pr_reason') or 'This repository has fewer than the trusted merged PR count.'}
+Choose a small, low-risk PR. Avoid broad refactors, large feature additions, or touching unrelated files.
+"""
     return f"""You are an autonomous open-source contribution worker.
 
 Goal: solve exactly this GitHub issue or user-approved preferred plan and open a PR.
@@ -103,10 +110,12 @@ Repository: {task['repo']}
 Issue: {task.get('issue_url') or task.get('issue_number')}
 Title: {task.get('title')}
 {preferred_context}
+{small_pr_context}
 
 Rules:
 - Read the issue and repository contribution guidance first.
 - Keep the change surgical and focused on the issue.
+- If a repo trust note asks for a small PR, choose the smallest useful implementation and minimize the diff.
 - Prefer adding or updating tests when practical.
 - Run the relevant tests or checks you can run locally.
 - Create a branch, commit the change, push it, and open a GitHub PR with gh.

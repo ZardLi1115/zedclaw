@@ -143,6 +143,13 @@ def analyze_once(repo_url: str) -> str:
     lang = _language()
     if not github_ops.gh_available() or not github_ops.gh_auth_ok():
         raise RuntimeError("GitHub CLI is unavailable or unauthenticated.")
+    with state.connect() as conn:
+        cooldown = state.repo_cooldown(conn, repo)
+    if cooldown:
+        until = time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(float(cooldown.get("until_at") or 0)))
+        if lang == "zh":
+            return f"重点关注分析未启动：{repo} 处于冷静期，结束时间 {until}。"
+        return f"Preferred analysis skipped: {repo} is in cooldown until {until}."
 
     eligible, reason, stars = github_ops._repo_eligible(
         repo,
@@ -155,6 +162,10 @@ def analyze_once(repo_url: str) -> str:
         return f"Preferred analysis skipped: {repo} is not eligible ({reason})."
 
     context = _repo_context(repo)
+    with state.connect() as conn:
+        merged_count = state.merged_pr_count(conn, repo)
+    context["repo_merged_pr_count"] = merged_count
+    context["small_pr_preferred"] = merged_count < int(_agent_cfg(cfg).get("small_pr_until_merged_count", 3) or 3)
     model = str(_agent_cfg(cfg).get("planner_model") or cfg.get("model", {}).get("default") or "gpt-5.5")
     plan = llm.call_json(
         model=model,
@@ -162,7 +173,8 @@ def analyze_once(repo_url: str) -> str:
             "You analyze one user-preferred GitHub repository for an autonomous OSS PR agent. "
             "Return strict JSON with keys: has_opportunity, title, issue_number, issue_url, "
             "summary, implementation_plan, risk, score. Prefer small valuable PRs that can be "
-            "verified. Use repository issues and visible code structure. Do not invent issue URLs."
+            "verified. If small_pr_preferred is true, avoid broad or risky PR ideas. Use repository "
+            "issues and visible code structure. Do not invent issue URLs."
         ),
         user=json.dumps(context, ensure_ascii=False)[:60000],
         max_tokens=1200,
@@ -240,7 +252,9 @@ def next_approved_candidate(conn) -> dict[str, Any] | None:
     rows = state.list_preferred_plans(conn, ["approved"])
     if not rows:
         return None
-    item = rows[0]
+    item = next((row for row in rows if not state.repo_in_cooldown(conn, row["repo"])), None)
+    if not item:
+        return None
     return {
         "repo": item["repo"],
         "issue_url": item.get("issue_url"),

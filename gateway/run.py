@@ -6218,6 +6218,8 @@ class GatewayRunner:
                     return await self._handle_language_command(event)
                 if _cmd_def_inner.name == "method":
                     return await self._handle_method_command(event)
+                if _cmd_def_inner.name == "oss-tool":
+                    return await self._handle_oss_tool_command(event)
                 if _cmd_def_inner.name == "prefer":
                     return await self._handle_prefer_command(event)
                 if _cmd_def_inner.name == "update":
@@ -6474,6 +6476,9 @@ class GatewayRunner:
 
         if canonical == "method":
             return await self._handle_method_command(event)
+
+        if canonical == "oss-tool":
+            return await self._handle_oss_tool_command(event)
 
         if canonical == "prefer":
             return await self._handle_prefer_command(event)
@@ -8604,6 +8609,16 @@ class GatewayRunner:
         except Exception as exc:
             logger.warning("oss_pr_agent human review command failed: %s", exc, exc_info=True)
             return f"OSS PR Agent human review unavailable: {exc}"
+
+    async def _handle_oss_tool_command(self, event: MessageEvent) -> str:
+        """Handle /oss-tool command without invoking the LLM."""
+        try:
+            from oss_pr_agent.status import render_tools
+
+            return await asyncio.to_thread(render_tools)
+        except Exception as exc:
+            logger.warning("oss_pr_agent tool command failed: %s", exc, exc_info=True)
+            return f"OSS PR Agent reusable tools unavailable: {exc}"
 
     async def _handle_language_command(self, event: MessageEvent) -> str:
         """Handle /language for OSS PR Agent status output only."""
