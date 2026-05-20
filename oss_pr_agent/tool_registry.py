@@ -130,7 +130,11 @@ def render_prompt_section(cfg: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "At the end of each run, actively decide whether the work revealed a reusable helper worth keeping.",
+            "Create or update a tool when you used a repeatable command, parser, checker, diagnosis flow, or repo-inspection script that is likely to help future PRs.",
+            "Skip tool creation only when the run used no reusable workflow; say that briefly in your final result.",
             "When you create a generally reusable helper, save it under the tool directory and register it in registry.json.",
+            "Keep tools generic across repositories. Do not save project-specific patches, secrets, credentials, or maintainer/private content.",
             "Keep descriptions short. When you use a tool, update its `last_used_at` Unix timestamp.",
             "Do not store secrets in tools or registry entries.",
         ]

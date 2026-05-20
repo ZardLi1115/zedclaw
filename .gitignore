@@ -50,6 +50,13 @@ cli-config.yaml
 AGENTS.md
 AGENTS.local.md
 
+# OSS PR Agent runtime state and self-created reusable tools.
+# The source code for the registry stays in oss_pr_agent/tool_registry.py;
+# generated tools and registries are user/runtime data and must not be pushed.
+.zedclaw/
+.tmp-zedclaw-test/
+oss_pr_agent/tools/
+
 # Skills Hub state (lives in ~/.zedclaw/skills/.hub/ at runtime, but just in case)
 skills/.hub/
 ignored/
